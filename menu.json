@@ -1,0 +1,146 @@
+[
+  {
+    "name": "Espresso",
+    "category": "Coffee",
+    "description": "A rich, concentrated shot of our house-roasted espresso blend.",
+    "price": 2.75,
+    "sizes": ["Single", "Double"],
+    "customizations": ["Extra shot", "Decaf"],
+    "allergens": []
+  },
+  {
+    "name": "Cappuccino",
+    "category": "Coffee",
+    "description": "Espresso topped with steamed milk and a thick layer of foam.",
+    "price": 4.25,
+    "sizes": ["Small", "Medium", "Large"],
+    "customizations": ["Oat milk", "Almond milk", "Soy milk", "Extra shot", "Decaf", "Sugar-free syrup"],
+    "allergens": ["Dairy"]
+  },
+  {
+    "name": "Caffe Latte",
+    "category": "Coffee",
+    "description": "Espresso with steamed milk and a light layer of foam, served hot or iced.",
+    "price": 4.50,
+    "sizes": ["Small", "Medium", "Large"],
+    "customizations": ["Hot or iced", "Oat milk", "Almond milk", "Soy milk", "Vanilla syrup", "Caramel syrup", "Extra shot"],
+    "allergens": ["Dairy"]
+  },
+  {
+    "name": "Cold Brew",
+    "category": "Coffee",
+    "description": "Slow-steeped for 18 hours for a smooth, low-acidity coffee, served over ice.",
+    "price": 4.75,
+    "sizes": ["Medium", "Large"],
+    "customizations": ["Splash of milk", "Vanilla syrup", "Sweet cream"],
+    "allergens": []
+  },
+  {
+    "name": "Drip Coffee",
+    "category": "Coffee",
+    "description": "Our daily-brewed medium roast, fresh all day.",
+    "price": 2.95,
+    "sizes": ["Small", "Medium", "Large"],
+    "customizations": ["Decaf", "Cream", "Sugar"],
+    "allergens": []
+  },
+  {
+    "name": "Chai Latte",
+    "category": "Tea",
+    "description": "Spiced black tea concentrate with steamed milk.",
+    "price": 4.50,
+    "sizes": ["Small", "Medium", "Large"],
+    "customizations": ["Hot or iced", "Oat milk", "Almond milk", "Extra spice"],
+    "allergens": ["Dairy"]
+  },
+  {
+    "name": "Iced Green Tea",
+    "category": "Cold Drinks",
+    "description": "Lightly sweetened green tea served over ice.",
+    "price": 3.50,
+    "sizes": ["Medium", "Large"],
+    "customizations": ["Unsweetened", "Extra sweet", "Lemon"],
+    "allergens": []
+  },
+  {
+    "name": "Iced Matcha Latte",
+    "category": "Cold Drinks",
+    "description": "Ceremonial-grade matcha whisked with cold milk over ice.",
+    "price": 5.25,
+    "sizes": ["Medium", "Large"],
+    "customizations": ["Oat milk", "Almond milk", "Extra matcha shot", "Vanilla syrup"],
+    "allergens": ["Dairy"]
+  },
+  {
+    "name": "Fresh Orange Juice",
+    "category": "Cold Drinks",
+    "description": "Squeezed fresh daily, no added sugar.",
+    "price": 4.00,
+    "sizes": ["Small", "Large"],
+    "customizations": [],
+    "allergens": []
+  },
+  {
+    "name": "Strawberry Banana Smoothie",
+    "category": "Cold Drinks",
+    "description": "Blended strawberries, banana, and yogurt.",
+    "price": 5.75,
+    "sizes": ["Medium", "Large"],
+    "customizations": ["Dairy-free yogurt", "Add protein powder", "Add spinach"],
+    "allergens": ["Dairy"]
+  },
+  {
+    "name": "Butter Croissant",
+    "category": "Pastries",
+    "description": "Flaky, all-butter French-style croissant baked fresh each morning.",
+    "price": 3.50,
+    "sizes": [],
+    "customizations": ["Warmed", "With butter", "With jam"],
+    "allergens": ["Gluten", "Dairy", "Eggs"]
+  },
+  {
+    "name": "Blueberry Muffin",
+    "category": "Pastries",
+    "description": "Moist muffin loaded with fresh blueberries and a crumb topping.",
+    "price": 3.75,
+    "sizes": [],
+    "customizations": ["Warmed"],
+    "allergens": ["Gluten", "Dairy", "Eggs"]
+  },
+  {
+    "name": "Chocolate Chip Cookie",
+    "category": "Pastries",
+    "description": "Classic soft-baked cookie loaded with chocolate chips.",
+    "price": 2.75,
+    "sizes": [],
+    "customizations": [],
+    "allergens": ["Gluten", "Dairy", "Eggs"]
+  },
+  {
+    "name": "Turkey & Swiss Sandwich",
+    "category": "Sandwiches",
+    "description": "Sliced turkey breast, Swiss cheese, lettuce, and tomato on sourdough.",
+    "price": 8.95,
+    "sizes": ["Half", "Whole"],
+    "customizations": ["No cheese", "Add avocado", "Add bacon", "Gluten-free bread", "Mustard", "Mayo"],
+    "allergens": ["Gluten", "Dairy"]
+  },
+  {
+    "name": "Avocado Toast",
+    "category": "Sandwiches",
+    "description": "Smashed avocado, chili flakes, and a drizzle of olive oil on toasted multigrain.",
+    "price": 7.50,
+    "sizes": [],
+    "customizations": ["Add fried egg", "Add feta", "Gluten-free bread", "Extra chili flakes"],
+    "allergens": ["Gluten"]
+  },
+  {
+    "name": "Breakfast Wrap",
+    "category": "Sandwiches",
+    "description": "Scrambled eggs, cheddar cheese, and bacon wrapped in a flour tortilla.",
+    "price": 7.95,
+    "sizes": [],
+    "customizations": ["No bacon", "Add hot sauce", "Add avocado", "Veggie (no bacon, add spinach & mushroom)"],
+    "allergens": ["Gluten", "Dairy", "Eggs"]
+  }
+]
