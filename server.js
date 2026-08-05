@@ -7,8 +7,9 @@ const session = require('express-session');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
+const basePrompt = fs.readFileSync(path.join(__dirname, 'system-prompt-milestone2.md'), 'utf8');
 
-const SYSTEM_PROMPT = `You are CafeBot, a friendly assistant for 2try1t café. You can see today's menu below.\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
+const SYSTEM_PROMPT = `${basePrompt}\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
