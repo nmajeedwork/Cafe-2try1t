@@ -9,11 +9,10 @@ const Anthropic = require('@anthropic-ai/sdk');
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
 const basePrompt = fs.readFileSync(path.join(__dirname, 'system-prompt-milestone4.md'), 'utf8');
 
-const SYSTEM_PROMPT = `${basePrompt}\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
-
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const MAX_TOOL_ROUNDS = 6;
+const MAX_RESPONSE_TOKENS = 4096;
 
 // Café operating hours ("HH:MM", 24-hour). Adjust here to change hours everywhere.
 const CAFE_HOURS = {
@@ -324,6 +323,14 @@ function executeTool(toolName, input, session) {
   }
 }
 
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function buildSystemPrompt() {
+  const now = new Date();
+  const nowLabel = `${DAY_NAMES[now.getDay()]}, ${formatClock(now.getHours() * 60 + now.getMinutes())}`;
+  return `${basePrompt}\n\n## Current Date & Time\nIt is currently **${nowLabel}**. This is the ground truth for "now" — use it to resolve relative times (e.g. "in 20 minutes", "this afternoon"). Never guess or claim you don't know the time.\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
+}
+
 const app = express();
 
 app.use(express.json());
@@ -356,10 +363,12 @@ app.post('/chat', async (req, res) => {
   req.session.history.push({ role: 'user', content: userMessage });
 
   try {
+    const systemPrompt = buildSystemPrompt();
+
     let response = await anthropic.messages.create({
       model: 'claude-sonnet-5',
-      max_tokens: 1024,
-      system: SYSTEM_PROMPT,
+      max_tokens: MAX_RESPONSE_TOKENS,
+      system: systemPrompt,
       tools: TOOLS,
       messages: req.session.history
     });
@@ -380,8 +389,8 @@ app.post('/chat', async (req, res) => {
 
       response = await anthropic.messages.create({
         model: 'claude-sonnet-5',
-        max_tokens: 1024,
-        system: SYSTEM_PROMPT,
+        max_tokens: MAX_RESPONSE_TOKENS,
+        system: systemPrompt,
         tools: TOOLS,
         messages: req.session.history
       });
@@ -389,19 +398,23 @@ app.post('/chat', async (req, res) => {
       rounds += 1;
     }
 
+    // Pull out any text content. If the loop above exhausted MAX_TOOL_ROUNDS while
+    // Claude still wanted to call tools, or the response otherwise has no usable text
+    // (e.g. stop_reason "max_tokens" with only a thinking block), fall back to a plain
+    // message instead of shipping an empty reply — and don't persist a response with
+    // dangling tool_use blocks or no real content into history.
+    const textFromResponse = response.content
+      .filter((block) => block.type === 'text')
+      .map((block) => block.text)
+      .join('\n');
+
     let reply;
-    if (response.stop_reason === 'tool_use') {
-      // Hit MAX_TOOL_ROUNDS while Claude still wanted to call tools. Don't persist the
-      // dangling tool_use blocks — the API requires every tool_use to be immediately
-      // followed by a matching tool_result, and there isn't one for this response.
+    if (response.stop_reason === 'tool_use' || !textFromResponse) {
       reply = "Sorry, I'm having trouble processing that — could you try rephrasing or breaking it into smaller steps?";
       req.session.history.push({ role: 'assistant', content: reply });
     } else {
       req.session.history.push({ role: 'assistant', content: response.content });
-      reply = response.content
-        .filter((block) => block.type === 'text')
-        .map((block) => block.text)
-        .join('\n');
+      reply = textFromResponse;
     }
 
     res.json({ reply, cart: cartSummary(req.session.cart), order: req.session.order });
