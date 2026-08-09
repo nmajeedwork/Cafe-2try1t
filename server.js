@@ -7,7 +7,7 @@ const session = require('express-session');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
-const basePrompt = fs.readFileSync(path.join(__dirname, 'system-prompt-milestone4.md'), 'utf8');
+const basePrompt = fs.readFileSync(path.join(__dirname, 'system-prompt-milestone5.md'), 'utf8');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -102,6 +102,14 @@ const TOOLS = [
         delivery_instructions: { type: 'string', description: 'Any special delivery instructions.' }
       },
       required: ['customer_name', 'phone_number', 'address']
+    }
+  },
+  {
+    name: 'confirm_order',
+    description: "Finalize the order. Only call this after the customer has explicitly approved the final summary. Validates that the cart isn't empty and required order details (order type, and address or pickup name as applicable) are set before confirming.",
+    input_schema: {
+      type: 'object',
+      properties: {}
     }
   }
 ];
@@ -304,7 +312,46 @@ function setDeliveryAddress(order, input) {
   return { success: true, delivery_address: order.deliveryAddress };
 }
 
+function generateOrderId() {
+  return `2TRY1T-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+}
+
+function confirmOrder(session) {
+  if (session.cart.length === 0) {
+    return { error: 'The cart is empty — add at least one item before confirming.' };
+  }
+  if (session.order.type !== 'pickup' && session.order.type !== 'delivery') {
+    return { error: 'Order type (pickup or delivery) must be set before confirming.' };
+  }
+  if (session.order.type === 'pickup' && (!session.order.customerName || !session.order.pickupTime)) {
+    return { error: 'A customer name and pickup time must be set before confirming a pickup order.' };
+  }
+  if (session.order.type === 'delivery' && !session.order.deliveryAddress) {
+    return { error: 'A delivery address must be set before confirming a delivery order.' };
+  }
+
+  session.order.confirmed = true;
+  session.order.confirmedAt = new Date().toISOString();
+  session.order.orderId = generateOrderId();
+
+  return { success: true, order: session.order, cart: cartSummary(session.cart) };
+}
+
+// Once an order is confirmed, its cart/order details are locked — no further mutation.
+const MUTATING_TOOLS = new Set([
+  'add_to_cart',
+  'remove_from_cart',
+  'update_customization',
+  'set_order_type',
+  'set_delivery_address',
+  'confirm_order'
+]);
+
 function executeTool(toolName, input, session) {
+  if (session.order.confirmed && MUTATING_TOOLS.has(toolName)) {
+    return { error: `This order (${session.order.orderId}) is already placed and can't be changed. Please start a new conversation for another order.` };
+  }
+
   switch (toolName) {
     case 'add_to_cart':
       return addToCart(session.cart, input);
@@ -318,6 +365,8 @@ function executeTool(toolName, input, session) {
       return setOrderType(session.order, input);
     case 'set_delivery_address':
       return setDeliveryAddress(session.order, input);
+    case 'confirm_order':
+      return confirmOrder(session);
     default:
       return { error: `Unknown tool: ${toolName}` };
   }
@@ -357,7 +406,15 @@ app.post('/chat', async (req, res) => {
     req.session.cart = [];
   }
   if (!req.session.order) {
-    req.session.order = { type: null, deliveryAddress: null, customerName: null, pickupTime: null };
+    req.session.order = {
+      type: null,
+      deliveryAddress: null,
+      customerName: null,
+      pickupTime: null,
+      confirmed: false,
+      confirmedAt: null,
+      orderId: null
+    };
   }
 
   req.session.history.push({ role: 'user', content: userMessage });
