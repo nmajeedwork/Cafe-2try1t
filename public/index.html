@@ -7,24 +7,39 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="chat-container">
-    <header>
-      <h1>☕ 2try1t CafeBot</h1>
-      <p>Ask about our menu, ingredients, or allergens</p>
+  <div class="app">
+    <header class="app-header">
+      <h1>☕ 2try1t</h1>
+      <p>Ask CafeBot about our menu, ingredients, or allergens</p>
     </header>
 
-    <div id="messages" class="messages"></div>
+    <div class="layout">
+      <aside class="cart-panel" id="cart-panel">
+        <h2>Your Order</h2>
+        <div id="cart-items" class="cart-items">
+          <p class="cart-empty">Your cart is empty</p>
+        </div>
+        <div class="cart-total-row">
+          <span>Total</span>
+          <span id="cart-total">$0.00</span>
+        </div>
+      </aside>
 
-    <form id="chat-form" class="chat-form">
-      <input
-        id="message-input"
-        type="text"
-        placeholder="Ask about the menu..."
-        autocomplete="off"
-        required
-      />
-      <button type="submit">Send</button>
-    </form>
+      <div class="chat-panel">
+        <div id="messages" class="messages"></div>
+
+        <form id="chat-form" class="chat-form">
+          <input
+            id="message-input"
+            type="text"
+            placeholder="Ask about the menu..."
+            autocomplete="off"
+            required
+          />
+          <button type="submit">Send</button>
+        </form>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>
