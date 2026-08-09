@@ -7,7 +7,8 @@ const session = require('express-session');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
-const basePrompt = fs.readFileSync(path.join(__dirname, 'system-prompt-milestone5.md'), 'utf8');
+const deals = JSON.parse(fs.readFileSync(path.join(__dirname, 'deals.json'), 'utf8'));
+const basePrompt = fs.readFileSync(path.join(__dirname, 'system-prompt.md'), 'utf8');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -111,6 +112,14 @@ const TOOLS = [
       type: 'object',
       properties: {}
     }
+  },
+  {
+    name: 'check_promotions',
+    description: "Check which promotions/deals are currently eligible for the customer's cart, and the resulting discount. Deals never stack — only the single best-discount deal is applied. Calculates everything server-side; never state a discount, deal, or promotion unless it came from this tool's result.",
+    input_schema: {
+      type: 'object',
+      properties: {}
+    }
   }
 ];
 
@@ -128,6 +137,82 @@ function cartSummary(cart) {
   }));
   const subtotal = Number(items.reduce((sum, item) => sum + item.lineTotal, 0).toFixed(2));
   return { items, subtotal };
+}
+
+function round2(n) {
+  return Number(n.toFixed(2));
+}
+
+function evaluateThresholdDeal(deal, subtotal) {
+  if (subtotal >= deal.minSubtotal) {
+    return round2(subtotal * (deal.discountPercent / 100));
+  }
+  return 0;
+}
+
+function evaluateComboDeal(deal, cart) {
+  let regularTotal = 0;
+  for (const required of deal.items) {
+    const cartQty = cart
+      .filter((item) => item.name.toLowerCase() === required.name.toLowerCase())
+      .reduce((sum, item) => sum + item.quantity, 0);
+    if (cartQty < required.quantity) {
+      return 0;
+    }
+    const menuItem = findMenuItem(required.name);
+    if (!menuItem) {
+      return 0;
+    }
+    regularTotal += menuItem.price * required.quantity;
+  }
+  const discount = round2(regularTotal - deal.comboPrice);
+  return discount > 0 ? discount : 0;
+}
+
+function evaluateBogoDeal(deal, cart) {
+  const unitPrices = [];
+  for (const item of cart) {
+    const menuItem = findMenuItem(item.name);
+    if (menuItem && menuItem.category === deal.category) {
+      for (let i = 0; i < item.quantity; i += 1) {
+        unitPrices.push(menuItem.price);
+      }
+    }
+  }
+  if (unitPrices.length < 2) {
+    return 0;
+  }
+  unitPrices.sort((a, b) => b - a);
+  let discount = 0;
+  for (let i = 1; i < unitPrices.length; i += 2) {
+    discount += unitPrices[i] * (deal.discountPercent / 100);
+  }
+  return round2(discount);
+}
+
+function checkPromotions(cart) {
+  const { subtotal } = cartSummary(cart);
+
+  const evaluated = deals.map((deal) => {
+    let discount = 0;
+    if (deal.type === 'threshold_discount') {
+      discount = evaluateThresholdDeal(deal, subtotal);
+    } else if (deal.type === 'combo') {
+      discount = evaluateComboDeal(deal, cart);
+    } else if (deal.type === 'bogo') {
+      discount = evaluateBogoDeal(deal, cart);
+    }
+    return { id: deal.id, name: deal.name, discount };
+  });
+
+  const eligibleDeals = evaluated.filter((deal) => deal.discount > 0);
+  // Deals never stack — only the single best-discount deal applies.
+  const appliedDeal = eligibleDeals.length
+    ? eligibleDeals.reduce((best, deal) => (deal.discount > best.discount ? deal : best))
+    : null;
+  const discountedTotal = round2(subtotal - (appliedDeal ? appliedDeal.discount : 0));
+
+  return { cartSubtotal: subtotal, eligibleDeals, appliedDeal, discountedTotal };
 }
 
 function addToCart(cart, input) {
@@ -334,7 +419,14 @@ function confirmOrder(session) {
   session.order.confirmedAt = new Date().toISOString();
   session.order.orderId = generateOrderId();
 
-  return { success: true, order: session.order, cart: cartSummary(session.cart) };
+  return {
+    success: true,
+    order: session.order,
+    cart: cartSummary(session.cart),
+    // Sourced from the same server-side calculation as check_promotions — never
+    // trust the model's own arithmetic for the final discounted total.
+    promotions: checkPromotions(session.cart)
+  };
 }
 
 // Once an order is confirmed, its cart/order details are locked — no further mutation.
@@ -367,6 +459,8 @@ function executeTool(toolName, input, session) {
       return setDeliveryAddress(session.order, input);
     case 'confirm_order':
       return confirmOrder(session);
+    case 'check_promotions':
+      return checkPromotions(session.cart);
     default:
       return { error: `Unknown tool: ${toolName}` };
   }
@@ -489,7 +583,12 @@ app.post('/chat', async (req, res) => {
       reply = textFromResponse;
     }
 
-    res.json({ reply, cart: cartSummary(req.session.cart), order: req.session.order });
+    res.json({
+      reply,
+      cart: cartSummary(req.session.cart),
+      order: req.session.order,
+      promotions: checkPromotions(req.session.cart)
+    });
   } catch (err) {
     console.error('Anthropic API error:', err);
     res.status(500).json({ error: 'Something went wrong talking to CafeBot. Please try again.' });
