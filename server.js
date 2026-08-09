@@ -7,7 +7,7 @@ const session = require('express-session');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
-const basePrompt = fs.readFileSync(path.join(__dirname, 'system-prompt-milestone3.md'), 'utf8');
+const basePrompt = fs.readFileSync(path.join(__dirname, 'system-prompt-milestone4.md'), 'utf8');
 
 const SYSTEM_PROMPT = `${basePrompt}\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
 
@@ -67,6 +67,34 @@ const TOOLS = [
         }
       },
       required: ['item_name', 'customizations']
+    }
+  },
+  {
+    name: 'set_order_type',
+    description: "Set whether the order is for pickup or delivery. For pickup orders, include customer_name and pickup_time when known.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        order_type: { type: 'string', enum: ['pickup', 'delivery'], description: "Either 'pickup' or 'delivery'." },
+        customer_name: { type: 'string', description: "Customer's name for the order (pickup orders)." },
+        pickup_time: { type: 'string', description: "Requested pickup time, if given (e.g. 'ASAP', '3:30 PM')." }
+      },
+      required: ['order_type']
+    }
+  },
+  {
+    name: 'set_delivery_address',
+    description: "Store the delivery contact and address for a delivery order. Only call this when the order type is 'delivery'.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        customer_name: { type: 'string', description: "Customer's name for the delivery." },
+        phone_number: { type: 'string', description: "Customer's contact phone number." },
+        address: { type: 'string', description: 'Full delivery street address.' },
+        apartment_unit: { type: 'string', description: 'Apartment or unit number, if applicable.' },
+        delivery_instructions: { type: 'string', description: 'Any special delivery instructions.' }
+      },
+      required: ['customer_name', 'phone_number', 'address']
     }
   }
 ];
@@ -137,16 +165,56 @@ function updateCustomization(cart, input) {
   return { success: true, updated: item, cart: cartSummary(cart) };
 }
 
-function executeTool(toolName, input, cart) {
+function setOrderType(order, input) {
+  const orderType = String(input.order_type || '').toLowerCase();
+  if (orderType !== 'pickup' && orderType !== 'delivery') {
+    return { error: `"${input.order_type}" is not a valid order type. Must be "pickup" or "delivery".` };
+  }
+  order.type = orderType;
+  if (orderType === 'pickup') {
+    if (input.customer_name) {
+      order.customerName = input.customer_name;
+    }
+    if (input.pickup_time) {
+      order.pickupTime = input.pickup_time;
+    }
+  }
+  return {
+    success: true,
+    order_type: order.type,
+    customer_name: order.customerName || null,
+    pickup_time: order.pickupTime || null
+  };
+}
+
+function setDeliveryAddress(order, input) {
+  if (!input.customer_name || !input.phone_number || !input.address) {
+    return { error: 'customer_name, phone_number, and address are required.' };
+  }
+  order.deliveryAddress = {
+    customerName: input.customer_name,
+    phoneNumber: input.phone_number,
+    address: input.address,
+    apartmentUnit: input.apartment_unit || null,
+    deliveryInstructions: input.delivery_instructions || null
+  };
+  return { success: true, delivery_address: order.deliveryAddress };
+}
+
+function executeTool(toolName, input, session) {
   switch (toolName) {
     case 'add_to_cart':
-      return addToCart(cart, input);
+      return addToCart(session.cart, input);
     case 'remove_from_cart':
-      return removeFromCart(cart, input);
+      return removeFromCart(session.cart, input);
     case 'view_cart':
-      return viewCart(cart);
+      return viewCart(session.cart);
     case 'update_customization':
-      return updateCustomization(cart, input);
+      return updateCustomization(session.cart, input);
+    case 'set_order_type':
+      return setOrderType(session.order, input);
+    case 'set_delivery_address':
+      return setDeliveryAddress(session.order, input);
     default:
       return { error: `Unknown tool: ${toolName}` };
   }
@@ -177,6 +245,9 @@ app.post('/chat', async (req, res) => {
   if (!req.session.cart) {
     req.session.cart = [];
   }
+  if (!req.session.order) {
+    req.session.order = { type: null, deliveryAddress: null, customerName: null, pickupTime: null };
+  }
 
   req.session.history.push({ role: 'user', content: userMessage });
 
@@ -198,7 +269,7 @@ app.post('/chat', async (req, res) => {
         .map((block) => ({
           type: 'tool_result',
           tool_use_id: block.id,
-          content: JSON.stringify(executeTool(block.name, block.input, req.session.cart))
+          content: JSON.stringify(executeTool(block.name, block.input, req.session))
         }));
 
       req.session.history.push({ role: 'user', content: toolResults });
@@ -229,7 +300,7 @@ app.post('/chat', async (req, res) => {
         .join('\n');
     }
 
-    res.json({ reply, cart: cartSummary(req.session.cart) });
+    res.json({ reply, cart: cartSummary(req.session.cart), order: req.session.order });
   } catch (err) {
     console.error('Anthropic API error:', err);
     res.status(500).json({ error: 'Something went wrong talking to CafeBot. Please try again.' });
