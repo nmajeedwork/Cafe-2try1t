@@ -374,10 +374,25 @@ function executeTool(toolName, input, session) {
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-function buildSystemPrompt() {
+// Never changes at runtime — computed once so its bytes are identical across every
+// request, which is what lets the cache breakpoint below actually hit.
+const STABLE_SYSTEM_TEXT = `${basePrompt}\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
+
+function buildSystemBlocks() {
   const now = new Date();
   const nowLabel = `${DAY_NAMES[now.getDay()]}, ${formatClock(now.getHours() * 60 + now.getMinutes())}`;
-  return `${basePrompt}\n\n## Current Date & Time\nIt is currently **${nowLabel}**. This is the ground truth for "now" — use it to resolve relative times (e.g. "in 20 minutes", "this afternoon"). Never guess or claim you don't know the time.\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
+  return [
+    // Stable block first, with the cache breakpoint — identical bytes on every request,
+    // so this (plus the tools array, which caches alongside the last system block) gets
+    // served from cache at ~0.1x cost instead of being repriced in full every call.
+    { type: 'text', text: STABLE_SYSTEM_TEXT, cache_control: { type: 'ephemeral' } },
+    // Volatile block after the breakpoint — changes every minute, but since it comes
+    // after the cached block it doesn't invalidate the cache, it just isn't cached itself.
+    {
+      type: 'text',
+      text: `## Current Date & Time\nIt is currently **${nowLabel}**. This is the ground truth for "now" — use it to resolve relative times (e.g. "in 20 minutes", "this afternoon"). Never guess or claim you don't know the time.`
+    }
+  ];
 }
 
 const app = express();
@@ -420,12 +435,12 @@ app.post('/chat', async (req, res) => {
   req.session.history.push({ role: 'user', content: userMessage });
 
   try {
-    const systemPrompt = buildSystemPrompt();
+    const systemBlocks = buildSystemBlocks();
 
     let response = await anthropic.messages.create({
       model: 'claude-sonnet-5',
       max_tokens: MAX_RESPONSE_TOKENS,
-      system: systemPrompt,
+      system: systemBlocks,
       tools: TOOLS,
       messages: req.session.history
     });
@@ -447,7 +462,7 @@ app.post('/chat', async (req, res) => {
       response = await anthropic.messages.create({
         model: 'claude-sonnet-5',
         max_tokens: MAX_RESPONSE_TOKENS,
-        system: systemPrompt,
+        system: systemBlocks,
         tools: TOOLS,
         messages: req.session.history
       });
