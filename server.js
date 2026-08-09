@@ -15,6 +15,14 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const MAX_TOOL_ROUNDS = 6;
 
+// Café operating hours ("HH:MM", 24-hour). Adjust here to change hours everywhere.
+const CAFE_HOURS = {
+  weekday: { open: '07:00', close: '20:00' }, // Mon–Fri
+  weekend: { open: '09:00', close: '22:00' } // Sat–Sun
+};
+// New pickup/delivery orders stop being accepted this many minutes before close.
+const CLOSING_BUFFER_MINUTES = 30;
+
 const TOOLS = [
   {
     name: 'add_to_cart',
@@ -71,13 +79,13 @@ const TOOLS = [
   },
   {
     name: 'set_order_type',
-    description: "Set whether the order is for pickup or delivery. For pickup orders, include customer_name and pickup_time when known.",
+    description: "Set whether the order is for pickup or delivery. For pickup orders, include customer_name and pickup_time when known. Enforces café operating hours — may return an error if we're closed, about to close, or the requested pickup time is outside hours.",
     input_schema: {
       type: 'object',
       properties: {
         order_type: { type: 'string', enum: ['pickup', 'delivery'], description: "Either 'pickup' or 'delivery'." },
         customer_name: { type: 'string', description: "Customer's name for the order (pickup orders)." },
-        pickup_time: { type: 'string', description: "Requested pickup time, if given (e.g. 'ASAP', '3:30 PM')." }
+        pickup_time: { type: 'string', description: "Requested pickup time for TODAY only, if given (e.g. 'ASAP', '6:15 PM'). There is no date field — this is always checked against today's hours." }
       },
       required: ['order_type']
     }
@@ -165,11 +173,107 @@ function updateCustomization(cart, input) {
   return { success: true, updated: item, cart: cartSummary(cart) };
 }
 
+function getHoursForDay(date) {
+  const day = date.getDay(); // 0 = Sunday ... 6 = Saturday
+  return day === 0 || day === 6 ? CAFE_HOURS.weekend : CAFE_HOURS.weekday;
+}
+
+function timeStringToMinutes(timeStr) {
+  const [h, m] = timeStr.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function formatClock(minutes) {
+  let h = Math.floor(minutes / 60) % 24;
+  const m = minutes % 60;
+  const meridiem = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${String(m).padStart(2, '0')} ${meridiem}`;
+}
+
+function getNextOpeningLabel(now) {
+  const todayHours = getHoursForDay(now);
+  const openMin = timeStringToMinutes(todayHours.open);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+
+  if (nowMin < openMin) {
+    return `${formatClock(openMin)} today`;
+  }
+
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  const tomorrowHours = getHoursForDay(tomorrow);
+  return `${formatClock(timeStringToMinutes(tomorrowHours.open))} tomorrow`;
+}
+
+function parseClockTime(timeStr) {
+  const normalized = String(timeStr || '').trim().toLowerCase();
+  if (['asap', 'as soon as possible', 'now'].includes(normalized)) {
+    return 'now';
+  }
+  const match = normalized.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/);
+  if (!match) {
+    return null;
+  }
+  let hour = parseInt(match[1], 10);
+  const minute = match[2] ? parseInt(match[2], 10) : 0;
+  const meridiem = match[3];
+  if (meridiem) {
+    if (hour === 12) hour = 0;
+    if (meridiem === 'pm') hour += 12;
+  }
+  if (hour > 23 || minute > 59) {
+    return null;
+  }
+  return hour * 60 + minute;
+}
+
+function validateOrderTiming(orderType, pickupTimeStr) {
+  const now = new Date();
+  const todayHours = getHoursForDay(now);
+  const openMin = timeStringToMinutes(todayHours.open);
+  const closeMin = timeStringToMinutes(todayHours.close);
+  const cutoffMin = closeMin - CLOSING_BUFFER_MINUTES;
+
+  // Delivery, or pickup with no specific time yet: validate against the current moment.
+  // New orders stop being accepted once we're within the closing buffer.
+  if (orderType === 'delivery' || !pickupTimeStr) {
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    if (nowMin < openMin || nowMin >= cutoffMin) {
+      const closedFor = orderType === 'delivery'
+        ? "delivery isn't available right now"
+        : "we can't schedule a pickup right now";
+      return { error: `Sorry, we're closed or about to close, so ${closedFor} — we open again at ${getNextOpeningLabel(now)}.` };
+    }
+    return { ok: true };
+  }
+
+  // Pickup with a specific requested time: validate that time itself against today's hours.
+  const parsed = parseClockTime(pickupTimeStr);
+  if (parsed === null) {
+    return { error: `I couldn't understand the pickup time "${pickupTimeStr}". Could you give a time like "6:15 PM"?` };
+  }
+  const targetMin = parsed === 'now' ? now.getHours() * 60 + now.getMinutes() : parsed;
+  // The cutoff itself is still an acceptable pickup slot — it's the LAST acceptable time.
+  if (targetMin < openMin || targetMin > cutoffMin) {
+    return {
+      error: `Sorry, ${pickupTimeStr} is outside our hours or too close to closing — we open again at ${getNextOpeningLabel(now)}. Could you choose a different pickup time?`
+    };
+  }
+  return { ok: true };
+}
+
 function setOrderType(order, input) {
   const orderType = String(input.order_type || '').toLowerCase();
   if (orderType !== 'pickup' && orderType !== 'delivery') {
     return { error: `"${input.order_type}" is not a valid order type. Must be "pickup" or "delivery".` };
   }
+
+  const timing = validateOrderTiming(orderType, orderType === 'pickup' ? input.pickup_time : null);
+  if (timing.error) {
+    return { error: timing.error };
+  }
+
   order.type = orderType;
   if (orderType === 'pickup') {
     if (input.customer_name) {
