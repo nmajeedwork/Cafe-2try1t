@@ -2,7 +2,7 @@ const messagesEl = document.getElementById('messages');
 const formEl = document.getElementById('chat-form');
 const inputEl = document.getElementById('message-input');
 const cartItemsEl = document.getElementById('cart-items');
-const cartTotalEl = document.getElementById('cart-total');
+const cartTotalsEl = document.getElementById('cart-totals');
 
 function addMessage(text, role) {
   const el = document.createElement('div');
@@ -22,7 +22,35 @@ function showTyping() {
   return el;
 }
 
-function renderCart(cart) {
+function addTotalRow(label, amount, modifierClass) {
+  const row = document.createElement('div');
+  row.className = modifierClass ? `cart-total-row ${modifierClass}` : 'cart-total-row';
+
+  const labelEl = document.createElement('span');
+  labelEl.textContent = label;
+  const amountEl = document.createElement('span');
+  amountEl.textContent = amount;
+
+  row.appendChild(labelEl);
+  row.appendChild(amountEl);
+  cartTotalsEl.appendChild(row);
+}
+
+function renderCartTotals(subtotal, promotions) {
+  cartTotalsEl.innerHTML = '';
+
+  const appliedDeal = promotions && promotions.appliedDeal;
+
+  if (appliedDeal) {
+    addTotalRow('Subtotal', `$${subtotal.toFixed(2)}`);
+    addTotalRow(appliedDeal.name, `-$${appliedDeal.discount.toFixed(2)}`, 'discount');
+    addTotalRow('Total', `$${promotions.discountedTotal.toFixed(2)}`, 'final');
+  } else {
+    addTotalRow('Total', `$${subtotal.toFixed(2)}`, 'final');
+  }
+}
+
+function renderCart(cart, promotions) {
   cartItemsEl.innerHTML = '';
 
   if (!cart || !cart.items || cart.items.length === 0) {
@@ -30,7 +58,7 @@ function renderCart(cart) {
     empty.className = 'cart-empty';
     empty.textContent = 'Your cart is empty';
     cartItemsEl.appendChild(empty);
-    cartTotalEl.textContent = '$0.00';
+    renderCartTotals(0, null);
     return;
   }
 
@@ -65,10 +93,10 @@ function renderCart(cart) {
     cartItemsEl.appendChild(row);
   }
 
-  cartTotalEl.textContent = `$${cart.subtotal.toFixed(2)}`;
+  renderCartTotals(cart.subtotal, promotions);
 }
 
-renderCart(null);
+renderCart(null, null);
 addMessage("Welcome to 2try1t! Ask me about our menu, ingredients, or allergens.", 'assistant');
 
 formEl.addEventListener('submit', async (e) => {
@@ -99,7 +127,7 @@ formEl.addEventListener('submit', async (e) => {
       addMessage(data.error || 'Something went wrong.', 'error');
     } else {
       addMessage(data.reply, 'assistant');
-      renderCart(data.cart);
+      renderCart(data.cart, data.promotions);
     }
   } catch (err) {
     typingEl.remove();

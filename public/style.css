@@ -113,18 +113,35 @@ body {
   line-height: 1.3;
 }
 
-.cart-total-row {
+.cart-totals {
   margin-top: 14px;
   padding-top: 12px;
   border-top: 1px solid #e5d8c5;
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cart-total-row {
+  display: flex;
   justify-content: space-between;
   align-items: baseline;
+  font-size: 0.85rem;
+  color: #7a6650;
+}
+
+.cart-total-row.discount {
+  color: #6b8f47;
+}
+
+.cart-total-row.final {
+  margin-top: 2px;
   font-weight: 700;
+  font-size: 1rem;
   color: #2b1d12;
 }
 
-#cart-total {
+.cart-total-row.final span:last-child {
   font-size: 1.1rem;
   color: #6f4e37;
 }
