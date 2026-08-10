@@ -595,6 +595,17 @@ app.post('/chat', async (req, res) => {
   }
 });
 
+app.post('/reset', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      console.error('Session destroy error:', err);
+      return res.status(500).json({ error: 'Could not start a new conversation. Please try again.' });
+    }
+    res.clearCookie('connect.sid');
+    res.json({ success: true });
+  });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`2try1t CafeBot listening on http://localhost:${PORT}`);

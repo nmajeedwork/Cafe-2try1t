@@ -3,6 +3,7 @@ const formEl = document.getElementById('chat-form');
 const inputEl = document.getElementById('message-input');
 const cartItemsEl = document.getElementById('cart-items');
 const cartTotalsEl = document.getElementById('cart-totals');
+const newOrderBtn = document.getElementById('new-order-btn');
 
 function addMessage(text, role) {
   const el = document.createElement('div');
@@ -136,5 +137,18 @@ formEl.addEventListener('submit', async (e) => {
     inputEl.disabled = false;
     formEl.querySelector('button').disabled = false;
     inputEl.focus();
+  }
+});
+
+newOrderBtn.addEventListener('click', async () => {
+  newOrderBtn.disabled = true;
+  try {
+    await fetch('/reset', { method: 'POST', credentials: 'same-origin' });
+  } catch (err) {
+    // Even if the request fails, reload anyway — worst case the old session
+    // cookie is still around and the next message picks up stale state again,
+    // which is the exact bug this button exists to let the customer escape.
+  } finally {
+    window.location.reload();
   }
 });
