@@ -5,6 +5,8 @@ const path = require('path');
 const express = require('express');
 const session = require('express-session');
 const Anthropic = require('@anthropic-ai/sdk');
+const twilio = require('twilio');
+const VoiceResponse = twilio.twiml.VoiceResponse;
 
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
 const deals = JSON.parse(fs.readFileSync(path.join(__dirname, 'deals.json'), 'utf8'));
@@ -489,9 +491,39 @@ function buildSystemBlocks() {
   ];
 }
 
+// Warn early if Twilio credentials aren't configured — the /voice/incoming route
+// can't validate incoming webhooks without TWILIO_AUTH_TOKEN, and would otherwise
+// fail confusingly on the first real call instead of at startup.
+if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+  console.warn('Warning: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set — /voice/incoming will reject all requests.');
+}
+
+// Confirms an incoming request to /voice/incoming genuinely came from Twilio, by
+// recomputing the X-Twilio-Signature header from the auth token, request URL, and
+// posted params (Twilio's documented webhook validation scheme) and rejecting on mismatch.
+function validateTwilioRequest(req, res, next) {
+  const twilioSignature = req.headers['x-twilio-signature'];
+  const requestUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+  const isValid = process.env.TWILIO_AUTH_TOKEN
+    && twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, twilioSignature, requestUrl, req.body);
+
+  if (!isValid) {
+    console.error('Rejected /voice/incoming request: invalid or missing Twilio signature.');
+    return res.status(403).type('text/plain').send('Invalid Twilio signature.');
+  }
+  next();
+}
+
 const app = express();
 
+// Twilio's requests arrive through a reverse proxy (ngrok in dev, and typically a load
+// balancer in production) that terminates TLS and forwards over plain HTTP. Without this,
+// req.protocol reports "http" even for https requests, which breaks Twilio signature
+// validation below (the signature is computed against the https:// URL Twilio actually called).
+app.set('trust proxy', true);
+
 app.use(express.json());
+app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded params
 app.use(
   session({
     secret: process.env.SESSION_SECRET || 'dev-secret',
@@ -593,6 +625,17 @@ app.post('/chat', async (req, res) => {
     console.error('Anthropic API error:', err);
     res.status(500).json({ error: 'Something went wrong talking to CafeBot. Please try again.' });
   }
+});
+
+// Twilio calls this webhook when someone dials the café's number. No AI or speech
+// processing yet — just proves the call connects and Twilio can reach this server.
+app.post('/voice/incoming', validateTwilioRequest, (req, res) => {
+  const twiml = new VoiceResponse();
+  // Spelled phonetically for TTS — Twilio's <Say> reads "2try1t" literally as
+  // characters/digits instead of the intended "to try it" pronunciation.
+  twiml.say('Thanks for calling To Try It, this is a test line.');
+  res.type('text/xml');
+  res.send(twiml.toString());
 });
 
 app.post('/reset', (req, res) => {
