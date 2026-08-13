@@ -627,13 +627,46 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// Twilio calls this webhook when someone dials the café's number. No AI or speech
-// processing yet — just proves the call connects and Twilio can reach this server.
+// Twilio calls this webhook when someone dials the café's number. Still no CafeBot
+// logic — this just proves the STT/TTS round trip works end to end: <Gather> uses
+// Twilio's built-in speech recognition to transcribe what the caller says, then
+// /voice/process-speech reads the transcript back. No connection to Claude yet.
 app.post('/voice/incoming', validateTwilioRequest, (req, res) => {
   const twiml = new VoiceResponse();
+
+  const gather = twiml.gather({
+    input: 'speech',
+    action: '/voice/process-speech',
+    method: 'POST',
+    // Seconds of silence to wait for the caller to start speaking before giving up.
+    // Twilio's default is 5s, which is too short — barely enough time to notice the
+    // prompt finished, let alone decide what to order.
+    timeout: 10
+  });
   // Spelled phonetically for TTS — Twilio's <Say> reads "2try1t" literally as
   // characters/digits instead of the intended "to try it" pronunciation.
-  twiml.say('Thanks for calling To Try It, this is a test line.');
+  // No beep — <Gather input="speech"> starts listening as soon as this finishes
+  // playing, unlike <Record>, so the prompt shouldn't promise an audio cue that never comes.
+  gather.say('Thanks for calling To Try It. Please say something, and I will read it back to you.');
+
+  // Only reached if <Gather> times out with no speech detected at all.
+  twiml.say("Sorry, I didn't catch anything. Goodbye.");
+
+  res.type('text/xml');
+  res.send(twiml.toString());
+});
+
+// Twilio POSTs here with the transcribed text once <Gather> above completes.
+app.post('/voice/process-speech', validateTwilioRequest, (req, res) => {
+  const twiml = new VoiceResponse();
+  const speechResult = req.body.SpeechResult;
+
+  if (speechResult) {
+    twiml.say(`You said: ${speechResult}`);
+  } else {
+    twiml.say("Sorry, I didn't catch that.");
+  }
+
   res.type('text/xml');
   res.send(twiml.toString());
 });
