@@ -323,6 +323,12 @@ function parseClockTime(timeStr) {
 }
 
 function validateOrderTiming(orderType, pickupTimeStr) {
+  // Dev-only override for testing outside real café hours — never set in committed
+  // config, .env is gitignored. Remove this env var to restore normal hours enforcement.
+  if (process.env.DISABLE_HOURS_CHECK === 'true') {
+    return { ok: true };
+  }
+
   const now = new Date();
   const todayHours = getHoursForDay(now);
   const openMin = timeStringToMinutes(todayHours.open);
@@ -491,11 +497,121 @@ function buildSystemBlocks() {
   ];
 }
 
+// Ensures a session-shaped object (browser session or voice call session) has the
+// fields CafeBot's logic expects, regardless of which transport it came from.
+function initSessionState(state) {
+  if (!state.history) {
+    state.history = [];
+  }
+  if (!state.cart) {
+    state.cart = [];
+  }
+  if (!state.order) {
+    state.order = {
+      type: null,
+      deliveryAddress: null,
+      customerName: null,
+      pickupTime: null,
+      confirmed: false,
+      confirmedAt: null,
+      orderId: null
+    };
+  }
+}
+
+// Runs one turn of CafeBot's tool-use loop against a session-shaped state object and
+// returns the same {reply, cart, order, promotions} shape /chat has always returned.
+// Shared by /chat (browser, cookie session) and the voice routes (phone call, keyed by
+// CallSid) so both transports go through identical tools, prompt, and cart/order logic.
+async function runCafeBotTurn(state, userMessage) {
+  state.history.push({ role: 'user', content: userMessage });
+
+  const systemBlocks = buildSystemBlocks();
+
+  let response = await anthropic.messages.create({
+    model: 'claude-sonnet-5',
+    max_tokens: MAX_RESPONSE_TOKENS,
+    system: systemBlocks,
+    tools: TOOLS,
+    messages: state.history
+  });
+
+  let rounds = 0;
+  while (response.stop_reason === 'tool_use' && rounds < MAX_TOOL_ROUNDS) {
+    state.history.push({ role: 'assistant', content: response.content });
+
+    const toolResults = response.content
+      .filter((block) => block.type === 'tool_use')
+      .map((block) => ({
+        type: 'tool_result',
+        tool_use_id: block.id,
+        content: JSON.stringify(executeTool(block.name, block.input, state))
+      }));
+
+    state.history.push({ role: 'user', content: toolResults });
+
+    response = await anthropic.messages.create({
+      model: 'claude-sonnet-5',
+      max_tokens: MAX_RESPONSE_TOKENS,
+      system: systemBlocks,
+      tools: TOOLS,
+      messages: state.history
+    });
+
+    rounds += 1;
+  }
+
+  // Pull out any text content. If the loop above exhausted MAX_TOOL_ROUNDS while
+  // Claude still wanted to call tools, or the response otherwise has no usable text
+  // (e.g. stop_reason "max_tokens" with only a thinking block), fall back to a plain
+  // message instead of shipping an empty reply — and don't persist a response with
+  // dangling tool_use blocks or no real content into history.
+  const textFromResponse = response.content
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n');
+
+  let reply;
+  if (response.stop_reason === 'tool_use' || !textFromResponse) {
+    reply = "Sorry, I'm having trouble processing that — could you try rephrasing or breaking it into smaller steps?";
+    state.history.push({ role: 'assistant', content: reply });
+  } else {
+    state.history.push({ role: 'assistant', content: response.content });
+    reply = textFromResponse;
+  }
+
+  return {
+    reply,
+    cart: cartSummary(state.cart),
+    order: state.order,
+    promotions: checkPromotions(state.cart)
+  };
+}
+
+// In-memory phone-call sessions, keyed by Twilio CallSid. A phone call has no cookie to
+// carry a browser session id, so CallSid — unique per call, provided on every voice
+// webhook — is the natural equivalent. Lives only as long as the server process; a
+// restart drops any calls in progress, which is fine for dev/testing.
+const voiceSessions = new Map();
+
+function getVoiceSession(callSid) {
+  if (!voiceSessions.has(callSid)) {
+    voiceSessions.set(callSid, {});
+  }
+  const state = voiceSessions.get(callSid);
+  initSessionState(state);
+  return state;
+}
+
 // Warn early if Twilio credentials aren't configured — the /voice/incoming route
 // can't validate incoming webhooks without TWILIO_AUTH_TOKEN, and would otherwise
 // fail confusingly on the first real call instead of at startup.
 if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
   console.warn('Warning: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set — /voice/incoming will reject all requests.');
+}
+
+if (process.env.DISABLE_HOURS_CHECK === 'true') {
+  console.warn('Warning: DISABLE_HOURS_CHECK=true — café operating hours are NOT being enforced. Dev/testing only.');
 }
 
 // Confirms an incoming request to /voice/incoming genuinely came from Twilio, by
@@ -540,114 +656,65 @@ app.post('/chat', async (req, res) => {
     return res.status(400).json({ error: 'Message is required.' });
   }
 
-  if (!req.session.history) {
-    req.session.history = [];
-  }
-  if (!req.session.cart) {
-    req.session.cart = [];
-  }
-  if (!req.session.order) {
-    req.session.order = {
-      type: null,
-      deliveryAddress: null,
-      customerName: null,
-      pickupTime: null,
-      confirmed: false,
-      confirmedAt: null,
-      orderId: null
-    };
-  }
-
-  req.session.history.push({ role: 'user', content: userMessage });
+  initSessionState(req.session);
 
   try {
-    const systemBlocks = buildSystemBlocks();
-
-    let response = await anthropic.messages.create({
-      model: 'claude-sonnet-5',
-      max_tokens: MAX_RESPONSE_TOKENS,
-      system: systemBlocks,
-      tools: TOOLS,
-      messages: req.session.history
-    });
-
-    let rounds = 0;
-    while (response.stop_reason === 'tool_use' && rounds < MAX_TOOL_ROUNDS) {
-      req.session.history.push({ role: 'assistant', content: response.content });
-
-      const toolResults = response.content
-        .filter((block) => block.type === 'tool_use')
-        .map((block) => ({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          content: JSON.stringify(executeTool(block.name, block.input, req.session))
-        }));
-
-      req.session.history.push({ role: 'user', content: toolResults });
-
-      response = await anthropic.messages.create({
-        model: 'claude-sonnet-5',
-        max_tokens: MAX_RESPONSE_TOKENS,
-        system: systemBlocks,
-        tools: TOOLS,
-        messages: req.session.history
-      });
-
-      rounds += 1;
-    }
-
-    // Pull out any text content. If the loop above exhausted MAX_TOOL_ROUNDS while
-    // Claude still wanted to call tools, or the response otherwise has no usable text
-    // (e.g. stop_reason "max_tokens" with only a thinking block), fall back to a plain
-    // message instead of shipping an empty reply — and don't persist a response with
-    // dangling tool_use blocks or no real content into history.
-    const textFromResponse = response.content
-      .filter((block) => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n');
-
-    let reply;
-    if (response.stop_reason === 'tool_use' || !textFromResponse) {
-      reply = "Sorry, I'm having trouble processing that — could you try rephrasing or breaking it into smaller steps?";
-      req.session.history.push({ role: 'assistant', content: reply });
-    } else {
-      req.session.history.push({ role: 'assistant', content: response.content });
-      reply = textFromResponse;
-    }
-
-    res.json({
-      reply,
-      cart: cartSummary(req.session.cart),
-      order: req.session.order,
-      promotions: checkPromotions(req.session.cart)
-    });
+    const result = await runCafeBotTurn(req.session, userMessage);
+    res.json(result);
   } catch (err) {
     console.error('Anthropic API error:', err);
     res.status(500).json({ error: 'Something went wrong talking to CafeBot. Please try again.' });
   }
 });
 
-// Twilio calls this webhook when someone dials the café's number. Still no CafeBot
-// logic — this just proves the STT/TTS round trip works end to end: <Gather> uses
-// Twilio's built-in speech recognition to transcribe what the caller says, then
-// /voice/process-speech reads the transcript back. No connection to Claude yet.
-app.post('/voice/incoming', validateTwilioRequest, (req, res) => {
-  const twiml = new VoiceResponse();
-
+// Reusable <Gather> block — every turn of the phone conversation (the opening prompt,
+// and every re-prompt after CafeBot replies) waits for speech the same way.
+// promptText is optional — mid-conversation turns pass nothing, since CafeBot's own
+// reply (already spoken right before this) almost always ends with a natural follow-up
+// question of its own, and repeating a generic "What else can I get for you?" on top of
+// that every single turn read as robotic and redundant.
+function addGather(twiml, promptText) {
   const gather = twiml.gather({
     input: 'speech',
     action: '/voice/process-speech',
     method: 'POST',
     // Seconds of silence to wait for the caller to start speaking before giving up.
     // Twilio's default is 5s, which is too short — barely enough time to notice the
-    // prompt finished, let alone decide what to order.
-    timeout: 10
+    // prompt finished, let alone decide what to say.
+    timeout: 10,
+    // How long to wait after the caller STOPS talking before deciding they're done —
+    // a separate setting from `timeout` above. Left unset, this defaults to matching
+    // `timeout` (10s), so every reply felt like it was hanging for 10 full seconds
+    // after the caller finished speaking. 'auto' uses Twilio's speech-end detection
+    // instead of a fixed wait, so it reacts as soon as the caller actually pauses.
+    speechTimeout: 'auto'
   });
+  // No beep — <Gather input="speech"> starts listening as soon as this finishes
+  // playing, unlike <Record>, so prompts shouldn't promise an audio cue that never comes.
+  if (promptText) {
+    gather.say(promptText);
+  }
+}
+
+// The café's name is styled "2try1t" everywhere in the menu/prompt data, which reads
+// fine as text in the browser chat, but Twilio's TTS reads it literally as characters
+// and digits instead of the intended "to try it" pronunciation. Claude naturally
+// writes the brand name that way since that's how it appears in its own context, so
+// this swaps it right before speech — voice-only, doesn't touch what the model
+// generates or what the browser chat displays.
+function speakable(text) {
+  return text.replace(/2try1t/gi, 'To Try It');
+}
+
+// Twilio calls this webhook when someone dials the café's number. Starts the same
+// tool-use conversation /chat uses — see runCafeBotTurn — just reached by phone instead
+// of the browser widget, with CallSid standing in for a browser session cookie.
+app.post('/voice/incoming', validateTwilioRequest, (req, res) => {
+  const twiml = new VoiceResponse();
+
   // Spelled phonetically for TTS — Twilio's <Say> reads "2try1t" literally as
   // characters/digits instead of the intended "to try it" pronunciation.
-  // No beep — <Gather input="speech"> starts listening as soon as this finishes
-  // playing, unlike <Record>, so the prompt shouldn't promise an audio cue that never comes.
-  gather.say('Thanks for calling To Try It. Please say something, and I will read it back to you.');
+  addGather(twiml, 'Thanks for calling To Try It. What can I get started for you?');
 
   // Only reached if <Gather> times out with no speech detected at all.
   twiml.say("Sorry, I didn't catch anything. Goodbye.");
@@ -656,16 +723,60 @@ app.post('/voice/incoming', validateTwilioRequest, (req, res) => {
   res.send(twiml.toString());
 });
 
-// Twilio POSTs here with the transcribed text once <Gather> above completes.
-app.post('/voice/process-speech', validateTwilioRequest, (req, res) => {
+// Bare farewells the caller says to end the call themselves — deliberately narrow
+// (whole-utterance match only) so it can't misfire on something like "no thanks" or
+// "nothing else", which are answers to a question, not a request to hang up.
+const FAREWELL_PHRASES = new Set([
+  'bye', 'bye bye', 'goodbye', 'good bye', 'see you', 'see ya', 'take care', 'have a good one'
+]);
+
+function isFarewell(text) {
+  const normalized = text.toLowerCase().trim().replace(/[.,!?]+$/g, '');
+  return FAREWELL_PHRASES.has(normalized);
+}
+
+// Twilio POSTs here with the transcribed text every time a <Gather> above completes —
+// both the very first thing the caller says, and every reply after that, since the
+// re-prompt below points back at this same route to keep the conversation looping.
+app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   const twiml = new VoiceResponse();
   const speechResult = req.body.SpeechResult;
+  const callSid = req.body.CallSid;
 
-  if (speechResult) {
-    twiml.say(`You said: ${speechResult}`);
-  } else {
-    twiml.say("Sorry, I didn't catch that.");
+  if (!speechResult) {
+    twiml.say("Sorry, I didn't catch anything. Goodbye.");
+    voiceSessions.delete(callSid);
+    res.type('text/xml');
+    return res.send(twiml.toString());
   }
+
+  // Handled before Claude ever sees it — a bare "bye" should end the call immediately
+  // instead of going through a full model turn and then re-prompting for more.
+  if (isFarewell(speechResult)) {
+    twiml.say('Thanks for calling To Try It, goodbye!');
+    voiceSessions.delete(callSid);
+    res.type('text/xml');
+    return res.send(twiml.toString());
+  }
+
+  try {
+    const state = getVoiceSession(callSid);
+    const result = await runCafeBotTurn(state, speechResult);
+    twiml.say(speakable(result.reply));
+  } catch (err) {
+    console.error('Anthropic API error (voice):', err);
+    twiml.say("Sorry, I'm having trouble right now. Please try again in a moment.");
+  }
+
+  // Loop back into another <Gather> so the call keeps going instead of ending after
+  // one exchange — this is what turns it into a real back-and-forth conversation. No
+  // prompt text here: CafeBot's reply just above already carries its own follow-up.
+  addGather(twiml);
+
+  // Only reached if the re-prompt above times out with no further speech — that
+  // won't happen until a *future* request, so don't clean up the session here; the
+  // `if (!speechResult)` branch above handles cleanup when that request comes in.
+  twiml.say('Thanks for calling, goodbye!');
 
   res.type('text/xml');
   res.send(twiml.toString());
