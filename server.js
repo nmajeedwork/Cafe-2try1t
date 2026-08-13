@@ -11,6 +11,7 @@ const VoiceResponse = twilio.twiml.VoiceResponse;
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
 const deals = JSON.parse(fs.readFileSync(path.join(__dirname, 'deals.json'), 'utf8'));
 const basePrompt = fs.readFileSync(path.join(__dirname, 'system-prompt.md'), 'utf8');
+const voiceBasePrompt = fs.readFileSync(path.join(__dirname, 'system-prompt-voice.md'), 'utf8');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -477,17 +478,20 @@ function executeTool(toolName, input, session) {
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 // Never changes at runtime — computed once so its bytes are identical across every
-// request, which is what lets the cache breakpoint below actually hit.
+// request, which is what lets the cache breakpoint below actually hit. Text chat and
+// voice calls use different base prompts (voice needs spoken-conversation rules the
+// browser chat doesn't), so each gets its own stable block and its own cache breakpoint.
 const STABLE_SYSTEM_TEXT = `${basePrompt}\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
+const STABLE_SYSTEM_TEXT_VOICE = `${voiceBasePrompt}\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
 
-function buildSystemBlocks() {
+function buildSystemBlocks(stableText) {
   const now = new Date();
   const nowLabel = `${DAY_NAMES[now.getDay()]}, ${formatClock(now.getHours() * 60 + now.getMinutes())}`;
   return [
     // Stable block first, with the cache breakpoint — identical bytes on every request,
     // so this (plus the tools array, which caches alongside the last system block) gets
     // served from cache at ~0.1x cost instead of being repriced in full every call.
-    { type: 'text', text: STABLE_SYSTEM_TEXT, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: stableText, cache_control: { type: 'ephemeral' } },
     // Volatile block after the breakpoint — changes every minute, but since it comes
     // after the cached block it doesn't invalidate the cache, it just isn't cached itself.
     {
@@ -522,11 +526,12 @@ function initSessionState(state) {
 // Runs one turn of CafeBot's tool-use loop against a session-shaped state object and
 // returns the same {reply, cart, order, promotions} shape /chat has always returned.
 // Shared by /chat (browser, cookie session) and the voice routes (phone call, keyed by
-// CallSid) so both transports go through identical tools, prompt, and cart/order logic.
-async function runCafeBotTurn(state, userMessage) {
+// CallSid) so both transports go through identical tools and cart/order logic — only
+// the system prompt (stableSystemText) differs, since voice needs spoken-conversation rules.
+async function runCafeBotTurn(state, userMessage, stableSystemText) {
   state.history.push({ role: 'user', content: userMessage });
 
-  const systemBlocks = buildSystemBlocks();
+  const systemBlocks = buildSystemBlocks(stableSystemText);
 
   let response = await anthropic.messages.create({
     model: 'claude-sonnet-5',
@@ -659,7 +664,7 @@ app.post('/chat', async (req, res) => {
   initSessionState(req.session);
 
   try {
-    const result = await runCafeBotTurn(req.session, userMessage);
+    const result = await runCafeBotTurn(req.session, userMessage, STABLE_SYSTEM_TEXT);
     res.json(result);
   } catch (err) {
     console.error('Anthropic API error:', err);
@@ -761,7 +766,7 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
 
   try {
     const state = getVoiceSession(callSid);
-    const result = await runCafeBotTurn(state, speechResult);
+    const result = await runCafeBotTurn(state, speechResult, STABLE_SYSTEM_TEXT_VOICE);
     twiml.say(speakable(result.reply));
   } catch (err) {
     console.error('Anthropic API error (voice):', err);
