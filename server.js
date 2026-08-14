@@ -487,6 +487,17 @@ const STABLE_SYSTEM_TEXT_VOICE = `${voiceBasePrompt}\n\n## Today's Menu (JSON)\n
 function buildSystemBlocks(stableText) {
   const now = new Date();
   const nowLabel = `${DAY_NAMES[now.getDay()]}, ${formatClock(now.getHours() * 60 + now.getMinutes())}`;
+
+  let timeText = `## Current Date & Time\nIt is currently **${nowLabel}**. This is the ground truth for "now" — use it to resolve relative times (e.g. "in 20 minutes", "this afternoon"). Never guess or claim you don't know the time.`;
+
+  // Dev-only: when the server-side hours check is bypassed (see DISABLE_HOURS_CHECK in
+  // validateOrderTiming), tell the model explicitly rather than letting it reason on its
+  // own from the stated hours + current time above and proactively refuse orders that
+  // set_order_type would actually accept — the two would otherwise disagree.
+  if (process.env.DISABLE_HOURS_CHECK === 'true') {
+    timeText += `\n\n**Testing note:** operating-hours enforcement is temporarily disabled for development testing. Do not decline or warn about an order being outside café hours for any reason — proceed normally and let set_order_type run as usual.`;
+  }
+
   return [
     // Stable block first, with the cache breakpoint — identical bytes on every request,
     // so this (plus the tools array, which caches alongside the last system block) gets
@@ -494,10 +505,7 @@ function buildSystemBlocks(stableText) {
     { type: 'text', text: stableText, cache_control: { type: 'ephemeral' } },
     // Volatile block after the breakpoint — changes every minute, but since it comes
     // after the cached block it doesn't invalidate the cache, it just isn't cached itself.
-    {
-      type: 'text',
-      text: `## Current Date & Time\nIt is currently **${nowLabel}**. This is the ground truth for "now" — use it to resolve relative times (e.g. "in 20 minutes", "this afternoon"). Never guess or claim you don't know the time.`
-    }
+    { type: 'text', text: timeText }
   ];
 }
 
@@ -735,9 +743,21 @@ const FAREWELL_PHRASES = new Set([
   'bye', 'bye bye', 'goodbye', 'good bye', 'see you', 'see ya', 'take care', 'have a good one'
 ]);
 
-function isFarewell(text) {
+// Minimum Twilio speech-recognition confidence (its own 0–1 score, sent alongside every
+// SpeechResult) required to trust a farewell match enough to hang up immediately. Without
+// this, a low-confidence mis-transcription of unclear or non-English speech that happens
+// to land exactly on a short phrase like "bye" would end the call the caller never meant
+// to end. Below the threshold it falls through to a normal CafeBot turn instead, where the
+// "unclear speech" prompt guidance asks the caller to repeat themselves.
+const FAREWELL_CONFIDENCE_THRESHOLD = 0.7;
+
+function isFarewell(text, confidence) {
   const normalized = text.toLowerCase().trim().replace(/[.,!?]+$/g, '');
-  return FAREWELL_PHRASES.has(normalized);
+  if (!FAREWELL_PHRASES.has(normalized)) {
+    return false;
+  }
+  const confidenceValue = parseFloat(confidence);
+  return Number.isFinite(confidenceValue) && confidenceValue >= FAREWELL_CONFIDENCE_THRESHOLD;
 }
 
 // Twilio POSTs here with the transcribed text every time a <Gather> above completes —
@@ -757,7 +777,7 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
 
   // Handled before Claude ever sees it — a bare "bye" should end the call immediately
   // instead of going through a full model turn and then re-prompting for more.
-  if (isFarewell(speechResult)) {
+  if (isFarewell(speechResult, req.body.Confidence)) {
     twiml.say('Thanks for calling To Try It, goodbye!');
     voiceSessions.delete(callSid);
     res.type('text/xml');
