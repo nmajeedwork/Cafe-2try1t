@@ -1,5 +1,6 @@
 node_modules/
 .env
-.claude/
+.claude/*
+!.claude/skills
 ngrok_*.log
 server_*.log
