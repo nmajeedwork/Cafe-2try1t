@@ -18,6 +18,12 @@ for (const file of fs.readdirSync(DYNAMIC_DIR)) {
 const MODEL_ID = process.env.ELEVENLABS_MODEL_ID || 'eleven_flash_v2_5';
 const DYNAMIC_FILE_TTL_MS = 5 * 60 * 1000;
 
+// Lower-bitrate MP3 than ElevenLabs' default (mp3_44100_128) - smaller file means both
+// faster generation and a faster fetch when Twilio retrieves it for <Play>. Phone audio
+// is already low-fidelity (Twilio's own codec), so the quality difference isn't audible
+// on a call.
+const OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || 'mp3_22050_32';
+
 async function callElevenLabsTTS(text) {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   const voiceId = process.env.ELEVENLABS_VOICE_ID;
@@ -25,7 +31,7 @@ async function callElevenLabsTTS(text) {
     throw new Error('ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID not configured.');
   }
 
-  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${OUTPUT_FORMAT}`, {
     method: 'POST',
     headers: {
       'xi-api-key': apiKey,

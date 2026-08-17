@@ -819,9 +819,16 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
     return res.send(twiml.toString());
   }
 
-  // Handled before Claude ever sees it — a bare "bye" should end the call immediately
-  // instead of going through a full model turn and then re-prompting for more.
-  if (isFarewell(speechResult, req.body.Confidence)) {
+  // Handled before Claude ever sees it - a bare "bye" ends the call immediately instead
+  // of going through a full model turn - but only when that's actually safe: if there's
+  // an unconfirmed order sitting in the cart, this canned line would end the call
+  // without ever telling the customer their order wasn't placed. In that case fall
+  // through to the normal model turn instead, so Claude can respond per the "Ending the
+  // Call" prompt rules (still a natural goodbye, but aware of the real order state).
+  const existingState = voiceSessions.get(callSid);
+  const hasUnconfirmedOrder = !!existingState && existingState.cart.length > 0 && !existingState.order.confirmed;
+
+  if (isFarewell(speechResult, req.body.Confidence) && !hasUnconfirmedOrder) {
     await speak(twiml, 'Thanks for calling To Try It, goodbye!', { req, cache: true });
     voiceSessions.delete(callSid);
     res.type('text/xml');
@@ -849,6 +856,31 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
 
   res.type('text/xml');
   res.send(twiml.toString());
+});
+
+// Dev-only: exercises system-prompt-voice.md over plain text, the same way /chat
+// exercises system-prompt.md. Lets voice-prompt changes (e.g. the Ending the Call /
+// Cart Updates rules) be tested with curl instead of a real phone call - /chat can't be
+// used for this since it always loads the browser prompt, not the voice one. Keeps its
+// own history under req.session.voiceTest so it never collides with a real /chat session.
+app.post('/dev/voice-chat', async (req, res) => {
+  const userMessage = (req.body.message || '').trim();
+  if (!userMessage) {
+    return res.status(400).json({ error: 'Message is required.' });
+  }
+
+  if (!req.session.voiceTest) {
+    req.session.voiceTest = {};
+  }
+  initSessionState(req.session.voiceTest);
+
+  try {
+    const result = await runCafeBotTurn(req.session.voiceTest, userMessage, STABLE_SYSTEM_TEXT_VOICE);
+    res.json(result);
+  } catch (err) {
+    console.error('Anthropic API error (voice dev test):', err);
+    res.status(500).json({ error: 'Something went wrong talking to CafeBot. Please try again.' });
+  }
 });
 
 app.post('/reset', (req, res) => {
