@@ -7,6 +7,7 @@ const session = require('express-session');
 const Anthropic = require('@anthropic-ai/sdk');
 const twilio = require('twilio');
 const VoiceResponse = twilio.twiml.VoiceResponse;
+const { speak } = require('./elevenlabs-tts');
 
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
 const deals = JSON.parse(fs.readFileSync(path.join(__dirname, 'deals.json'), 'utf8'));
@@ -623,6 +624,10 @@ if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
   console.warn('Warning: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set — /voice/incoming will reject all requests.');
 }
 
+if (!process.env.ELEVENLABS_API_KEY || !process.env.ELEVENLABS_VOICE_ID) {
+  console.warn('Warning: ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID not set — voice replies will fall back to Twilio <Say>.');
+}
+
 if (process.env.DISABLE_HOURS_CHECK === 'true') {
   console.warn('Warning: DISABLE_HOURS_CHECK=true — café operating hours are NOT being enforced. Dev/testing only.');
 }
@@ -686,7 +691,7 @@ app.post('/chat', async (req, res) => {
 // reply (already spoken right before this) almost always ends with a natural follow-up
 // question of its own, and repeating a generic "What else can I get for you?" on top of
 // that every single turn read as robotic and redundant.
-function addGather(twiml, promptText) {
+async function addGather(twiml, promptText, req) {
   const gather = twiml.gather({
     input: 'speech',
     action: '/voice/process-speech',
@@ -705,7 +710,7 @@ function addGather(twiml, promptText) {
   // No beep — <Gather input="speech"> starts listening as soon as this finishes
   // playing, unlike <Record>, so prompts shouldn't promise an audio cue that never comes.
   if (promptText) {
-    gather.say(promptText);
+    await speak(gather, promptText, { req, cache: true });
   }
 }
 
@@ -722,15 +727,15 @@ function speakable(text) {
 // Twilio calls this webhook when someone dials the café's number. Starts the same
 // tool-use conversation /chat uses — see runCafeBotTurn — just reached by phone instead
 // of the browser widget, with CallSid standing in for a browser session cookie.
-app.post('/voice/incoming', validateTwilioRequest, (req, res) => {
+app.post('/voice/incoming', validateTwilioRequest, async (req, res) => {
   const twiml = new VoiceResponse();
 
   // Spelled phonetically for TTS — Twilio's <Say> reads "2try1t" literally as
   // characters/digits instead of the intended "to try it" pronunciation.
-  addGather(twiml, 'Thanks for calling To Try It. What can I get started for you?');
+  await addGather(twiml, 'Thanks for calling To Try It. What can I get started for you?', req);
 
   // Only reached if <Gather> times out with no speech detected at all.
-  twiml.say("Sorry, I didn't catch anything. Goodbye.");
+  await speak(twiml, "Sorry, I didn't catch anything. Goodbye.", { req, cache: true });
 
   res.type('text/xml');
   res.send(twiml.toString());
@@ -769,7 +774,7 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   const callSid = req.body.CallSid;
 
   if (!speechResult) {
-    twiml.say("Sorry, I didn't catch anything. Goodbye.");
+    await speak(twiml, "Sorry, I didn't catch anything. Goodbye.", { req, cache: true });
     voiceSessions.delete(callSid);
     res.type('text/xml');
     return res.send(twiml.toString());
@@ -778,7 +783,7 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   // Handled before Claude ever sees it — a bare "bye" should end the call immediately
   // instead of going through a full model turn and then re-prompting for more.
   if (isFarewell(speechResult, req.body.Confidence)) {
-    twiml.say('Thanks for calling To Try It, goodbye!');
+    await speak(twiml, 'Thanks for calling To Try It, goodbye!', { req, cache: true });
     voiceSessions.delete(callSid);
     res.type('text/xml');
     return res.send(twiml.toString());
@@ -787,21 +792,21 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   try {
     const state = getVoiceSession(callSid);
     const result = await runCafeBotTurn(state, speechResult, STABLE_SYSTEM_TEXT_VOICE);
-    twiml.say(speakable(result.reply));
+    await speak(twiml, speakable(result.reply), { req, cache: false, callSid });
   } catch (err) {
     console.error('Anthropic API error (voice):', err);
-    twiml.say("Sorry, I'm having trouble right now. Please try again in a moment.");
+    await speak(twiml, "Sorry, I'm having trouble right now. Please try again in a moment.", { req, cache: true });
   }
 
   // Loop back into another <Gather> so the call keeps going instead of ending after
   // one exchange — this is what turns it into a real back-and-forth conversation. No
   // prompt text here: CafeBot's reply just above already carries its own follow-up.
-  addGather(twiml);
+  await addGather(twiml, undefined, req);
 
   // Only reached if the re-prompt above times out with no further speech — that
   // won't happen until a *future* request, so don't clean up the session here; the
   // `if (!speechResult)` branch above handles cleanup when that request comes in.
-  twiml.say('Thanks for calling, goodbye!');
+  await speak(twiml, 'Thanks for calling, goodbye!', { req, cache: true });
 
   res.type('text/xml');
   res.send(twiml.toString());
