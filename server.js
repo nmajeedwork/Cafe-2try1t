@@ -510,6 +510,43 @@ function buildSystemBlocks(stableText) {
   ];
 }
 
+// Conversation history grows every turn but is otherwise sent byte-for-byte identical
+// to the previous call's history plus one increment (a user message, or a tool round's
+// assistant+tool_result pair) — an ideal shape for prompt caching. This returns a copy
+// with a cache breakpoint on the last message's last content block, without mutating the
+// stored history (only this outgoing request should carry the marker at this position;
+// the next call will place a fresh one further along). Anthropic resolves the breakpoint
+// against whatever prefix is already cached from the previous call, so everything before
+// the newest increment is served from cache instead of repriced in full every turn.
+function withCacheBreakpoint(messages) {
+  if (messages.length === 0) {
+    return messages;
+  }
+  const last = messages[messages.length - 1];
+  const content = typeof last.content === 'string'
+    ? [{ type: 'text', text: last.content }]
+    : last.content;
+  const markedContent = content.map((block, i) =>
+    i === content.length - 1 ? { ...block, cache_control: { type: 'ephemeral' } } : block
+  );
+  return [...messages.slice(0, -1), { ...last, content: markedContent }];
+}
+
+// Visibility into prompt caching per API call, so a caching regression (e.g. a future
+// edit that breaks the cache breakpoint) shows up immediately in the server logs instead
+// of only as a surprise on the Anthropic bill.
+function logCacheUsage(usage) {
+  if (!usage) {
+    return;
+  }
+  console.log(
+    `[anthropic usage] input=${usage.input_tokens} ` +
+    `cache_read=${usage.cache_read_input_tokens || 0} ` +
+    `cache_write=${usage.cache_creation_input_tokens || 0} ` +
+    `output=${usage.output_tokens}`
+  );
+}
+
 // Ensures a session-shaped object (browser session or voice call session) has the
 // fields CafeBot's logic expects, regardless of which transport it came from.
 function initSessionState(state) {
@@ -547,8 +584,9 @@ async function runCafeBotTurn(state, userMessage, stableSystemText) {
     max_tokens: MAX_RESPONSE_TOKENS,
     system: systemBlocks,
     tools: TOOLS,
-    messages: state.history
+    messages: withCacheBreakpoint(state.history)
   });
+  logCacheUsage(response.usage);
 
   let rounds = 0;
   while (response.stop_reason === 'tool_use' && rounds < MAX_TOOL_ROUNDS) {
@@ -569,9 +607,10 @@ async function runCafeBotTurn(state, userMessage, stableSystemText) {
       max_tokens: MAX_RESPONSE_TOKENS,
       system: systemBlocks,
       tools: TOOLS,
-      messages: state.history
+      messages: withCacheBreakpoint(state.history)
     });
 
+    logCacheUsage(response.usage);
     rounds += 1;
   }
 
