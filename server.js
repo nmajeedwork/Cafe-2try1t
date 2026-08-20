@@ -8,6 +8,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const twilio = require('twilio');
 const VoiceResponse = twilio.twiml.VoiceResponse;
 const { speak } = require('./elevenlabs-tts');
+const { saveInProgressOrder, clearInProgressOrder, findResumableOrder } = require('./voice-order-recovery');
 
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
 const deals = JSON.parse(fs.readFileSync(path.join(__dirname, 'deals.json'), 'utf8'));
@@ -485,7 +486,7 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 const STABLE_SYSTEM_TEXT = `${basePrompt}\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
 const STABLE_SYSTEM_TEXT_VOICE = `${voiceBasePrompt}\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
 
-function buildSystemBlocks(stableText) {
+function buildSystemBlocks(stableText, { resumedOrder = false } = {}) {
   const now = new Date();
   const nowLabel = `${DAY_NAMES[now.getDay()]}, ${formatClock(now.getHours() * 60 + now.getMinutes())}`;
 
@@ -497,6 +498,15 @@ function buildSystemBlocks(stableText) {
   // set_order_type would actually accept — the two would otherwise disagree.
   if (process.env.DISABLE_HOURS_CHECK === 'true') {
     timeText += `\n\n**Testing note:** operating-hours enforcement is temporarily disabled for development testing. Do not decline or warn about an order being outside café hours for any reason — proceed normally and let set_order_type run as usual.`;
+  }
+
+  // A dropped call was already restored into the cart/order tools before this turn (see
+  // /voice/incoming in voice-order-recovery.js) and the caller already heard a "welcome
+  // back" greeting about it - but that greeting was spoken directly by Twilio, never
+  // added to conversation history, so without this note the model's history is blank and
+  // it has no way to know the greeting happened or that the cart isn't actually empty.
+  if (resumedOrder) {
+    timeText += `\n\n**Resumed call:** This caller just heard a greeting saying their order from a dropped call was restored. The cart and order tools already reflect that saved state right now — call \`view_cart\` before responding to their first message so you can speak to what's actually there, instead of assuming the cart is empty.`;
   }
 
   return [
@@ -575,9 +585,14 @@ function initSessionState(state) {
 // CallSid) so both transports go through identical tools and cart/order logic — only
 // the system prompt (stableSystemText) differs, since voice needs spoken-conversation rules.
 async function runCafeBotTurn(state, userMessage, stableSystemText) {
+  // Blank history with an already-populated cart can only happen on the first turn of a
+  // resumed call (a genuinely fresh session always starts with an empty cart) - check
+  // before pushing this turn's message so it only fires once, on that first turn.
+  const resumedOrder = state.history.length === 0 && state.cart.length > 0;
+
   state.history.push({ role: 'user', content: userMessage });
 
-  const systemBlocks = buildSystemBlocks(stableSystemText);
+  const systemBlocks = buildSystemBlocks(stableSystemText, { resumedOrder });
 
   let response = await anthropic.messages.create({
     model: 'claude-sonnet-5',
@@ -774,10 +789,25 @@ function speakable(text) {
 // of the browser widget, with CallSid standing in for a browser session cookie.
 app.post('/voice/incoming', validateTwilioRequest, async (req, res) => {
   const twiml = new VoiceResponse();
+  const callSid = req.body.CallSid;
+  const from = req.body.From;
+
+  // If this caller had an order in progress from a recent dropped call, restore it into
+  // the new call's session before the first turn — the cart/order tools are the source of
+  // truth Claude relies on (see runCafeBotTurn), so seeding them here is enough for a
+  // `view_cart` mid-call to see the resumed items, no conversation history needed.
+  const resumable = findResumableOrder(from);
+  let greeting = 'Thanks for calling To Try It. What can I get started for you?';
+  if (resumable) {
+    const state = getVoiceSession(callSid);
+    state.cart = resumable.cart;
+    state.order = resumable.order;
+    greeting = "Welcome back to To Try It — looks like you had an order in progress from a moment ago. Want to pick up where you left off, or start fresh?";
+  }
 
   // Spelled phonetically for TTS — Twilio's <Say> reads "2try1t" literally as
   // characters/digits instead of the intended "to try it" pronunciation.
-  await addGather(twiml, 'Thanks for calling To Try It. What can I get started for you?', req);
+  await addGather(twiml, greeting, req);
 
   // No fallback verb needed here — actionOnEmptyResult (set in addGather) means a total
   // silence timeout still POSTs to /voice/process-speech, same as any other turn.
@@ -831,6 +861,7 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   const twiml = new VoiceResponse();
   const speechResult = req.body.SpeechResult;
   const callSid = req.body.CallSid;
+  const from = req.body.From;
 
   if (!speechResult) {
     const state = getVoiceSession(callSid);
@@ -867,19 +898,32 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   const hasUnconfirmedOrder = !!existingState && existingState.cart.length > 0 && !existingState.order.confirmed;
 
   if (isFarewell(speechResult, req.body.Confidence) && !hasUnconfirmedOrder) {
+    // hasUnconfirmedOrder is false here, so there's nothing genuinely in progress — but
+    // clear anyway in case this call had resumed an older saved order and is now done.
+    clearInProgressOrder(from);
     await speak(twiml, 'Thanks for calling To Try It, goodbye!', { req, cache: true });
     voiceSessions.delete(callSid);
     res.type('text/xml');
     return res.send(twiml.toString());
   }
 
+  const state = getVoiceSession(callSid);
   try {
-    const state = getVoiceSession(callSid);
     const result = await runCafeBotTurn(state, speechResult, STABLE_SYSTEM_TEXT_VOICE);
     await speak(twiml, speakable(result.reply), { req, cache: false, callSid });
   } catch (err) {
     console.error('Anthropic API error (voice):', err);
     await speak(twiml, "Sorry, I'm having trouble right now. Please try again in a moment.", { req, cache: true });
+  }
+
+  // Write-through after every turn, not just on hangup — there's no Twilio status
+  // callback wired up to tell this app when a call actually drops, so this is what
+  // guarantees a dropped call never loses more than the current exchange. See
+  // voice-order-recovery.js.
+  if (state.order.confirmed || state.cart.length === 0) {
+    clearInProgressOrder(from);
+  } else {
+    saveInProgressOrder({ from, callSid, cart: state.cart, order: state.order });
   }
 
   // Loop back into another <Gather> so the call keeps going instead of ending after
