@@ -744,7 +744,13 @@ async function addGather(twiml, promptText, req) {
     // `timeout` (10s), so every reply felt like it was hanging for 10 full seconds
     // after the caller finished speaking. 'auto' uses Twilio's speech-end detection
     // instead of a fixed wait, so it reacts as soon as the caller actually pauses.
-    speechTimeout: 'auto'
+    speechTimeout: 'auto',
+    // Without this, Twilio only calls `action` when it actually hears something (even a
+    // low-confidence guess) — a caller who stays completely silent for the full `timeout`
+    // just falls through to whatever TwiML verb comes next in this response, with no way
+    // to tell "still thinking" apart from "hung up". Forcing the action call on every
+    // timeout routes silence through /voice/process-speech's own silence-strike handling.
+    actionOnEmptyResult: true
   });
   // No beep — <Gather input="speech"> starts listening as soon as this finishes
   // playing, unlike <Record>, so prompts shouldn't promise an audio cue that never comes.
@@ -773,8 +779,8 @@ app.post('/voice/incoming', validateTwilioRequest, async (req, res) => {
   // characters/digits instead of the intended "to try it" pronunciation.
   await addGather(twiml, 'Thanks for calling To Try It. What can I get started for you?', req);
 
-  // Only reached if <Gather> times out with no speech detected at all.
-  await speak(twiml, "Sorry, I didn't catch anything. Goodbye.", { req, cache: true });
+  // No fallback verb needed here — actionOnEmptyResult (set in addGather) means a total
+  // silence timeout still POSTs to /voice/process-speech, same as any other turn.
 
   res.type('text/xml');
   res.send(twiml.toString());
@@ -804,6 +810,20 @@ function isFarewell(text, confidence) {
   return Number.isFinite(confidenceValue) && confidenceValue >= FAREWELL_CONFIDENCE_THRESHOLD;
 }
 
+// How many consecutive silent timeouts (no speech captured at all — see
+// actionOnEmptyResult in addGather) we tolerate before actually ending the call. Each
+// one is a fresh 10s <Gather> timeout, so this is what separates "caller is thinking, or
+// said 'hold on' and paused" from "caller hung up or walked away". Reset to 0 the moment
+// real speech comes back in, so a later pause gets a full fresh grace period too.
+const MAX_SILENCE_STRIKES = 2;
+
+// Gentle, increasingly explicit re-prompts for each silent strike — reused verbatim
+// across all calls, so these are cacheable static lines like the other stock phrases.
+const SILENCE_REPROMPTS = [
+  'Still there? Take your time.',
+  "Just checking you're still with me — whenever you're ready."
+];
+
 // Twilio POSTs here with the transcribed text every time a <Gather> above completes —
 // both the very first thing the caller says, and every reply after that, since the
 // re-prompt below points back at this same route to keep the conversation looping.
@@ -813,8 +833,19 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   const callSid = req.body.CallSid;
 
   if (!speechResult) {
-    await speak(twiml, "Sorry, I didn't catch anything. Goodbye.", { req, cache: true });
-    voiceSessions.delete(callSid);
+    const state = getVoiceSession(callSid);
+    state.silenceStrikes = (state.silenceStrikes || 0) + 1;
+
+    if (state.silenceStrikes > MAX_SILENCE_STRIKES) {
+      await speak(twiml, "I haven't heard back, so I'll go ahead and end the call here. Feel free to call again whenever you're ready. Goodbye!", { req, cache: true });
+      voiceSessions.delete(callSid);
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+
+    const repromptText = SILENCE_REPROMPTS[state.silenceStrikes - 1] || SILENCE_REPROMPTS[SILENCE_REPROMPTS.length - 1];
+    await speak(twiml, repromptText, { req, cache: true });
+    await addGather(twiml, undefined, req);
     res.type('text/xml');
     return res.send(twiml.toString());
   }
@@ -826,6 +857,13 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   // through to the normal model turn instead, so Claude can respond per the "Ending the
   // Call" prompt rules (still a natural goodbye, but aware of the real order state).
   const existingState = voiceSessions.get(callSid);
+
+  // Real speech came back in, so the caller wasn't gone — just paused. Give the next
+  // silence its own full grace period rather than picking up where this one left off.
+  if (existingState) {
+    existingState.silenceStrikes = 0;
+  }
+
   const hasUnconfirmedOrder = !!existingState && existingState.cart.length > 0 && !existingState.order.confirmed;
 
   if (isFarewell(speechResult, req.body.Confidence) && !hasUnconfirmedOrder) {
@@ -849,10 +887,9 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   // prompt text here: CafeBot's reply just above already carries its own follow-up.
   await addGather(twiml, undefined, req);
 
-  // Only reached if the re-prompt above times out with no further speech — that
-  // won't happen until a *future* request, so don't clean up the session here; the
-  // `if (!speechResult)` branch above handles cleanup when that request comes in.
-  await speak(twiml, 'Thanks for calling, goodbye!', { req, cache: true });
+  // No fallback verb needed here — actionOnEmptyResult (set in addGather) means a
+  // silence timeout on this gather still POSTs back to /voice/process-speech, where the
+  // `if (!speechResult)` branch above handles it on that future request.
 
   res.type('text/xml');
   res.send(twiml.toString());
