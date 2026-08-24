@@ -31,6 +31,7 @@ async function callElevenLabsTTS(text) {
     throw new Error('ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID not configured.');
   }
 
+  const startedAt = Date.now();
   const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${OUTPUT_FORMAT}`, {
     method: 'POST',
     headers: {
@@ -45,7 +46,12 @@ async function callElevenLabsTTS(text) {
     throw new Error(`ElevenLabs TTS request failed: ${response.status} ${response.statusText}`);
   }
 
-  return Buffer.from(await response.arrayBuffer());
+  const audio = Buffer.from(await response.arrayBuffer());
+  // See the matching [latency] log in server.js - this is the other half of a turn's
+  // time budget, generation only (doesn't include Twilio then fetching the file back
+  // over the ngrok tunnel for <Play>).
+  console.log(`[latency] ElevenLabs generation: ${Date.now() - startedAt}ms (${text.length} chars)`);
+  return audio;
 }
 
 function buildUrl(req, relPath) {

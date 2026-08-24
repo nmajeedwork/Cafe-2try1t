@@ -117,15 +117,16 @@ const TOOLS = [
       type: 'object',
       properties: {}
     }
-  },
-  {
-    name: 'check_promotions',
-    description: "Check which promotions/deals are currently eligible for the customer's cart, and the resulting discount. Deals never stack — only the single best-discount deal is applied. Calculates everything server-side; never state a discount, deal, or promotion unless it came from this tool's result.",
-    input_schema: {
-      type: 'object',
-      properties: {}
-    }
   }
+  // No standalone check_promotions tool - every tool that touches or reports the cart
+  // (add_to_cart, remove_from_cart, update_customization, view_cart, confirm_order)
+  // already embeds a `promotions` field in its own result (see checkPromotions below).
+  // This used to be a separate tool the model was instructed to call after every cart
+  // change, which cost a full extra Claude round-trip on nearly every turn - real-call
+  // latency logs showed it still happening even after that instruction was added,
+  // since a prompt instruction is a suggestion the model can miss under load, not a
+  // guarantee. Removing the tool entirely closes that gap deterministically instead of
+  // hoping the model remembers not to call it.
 ];
 
 function findMenuItem(itemName) {
@@ -243,7 +244,11 @@ function addToCart(cart, input) {
   };
 
   cart.push(cartItem);
-  return { success: true, added: cartItem, cart: cartSummary(cart) };
+  // Embedding promotions here (same pattern as confirmOrder) saves a full extra
+  // Claude round-trip that a separate check_promotions call would otherwise cost on
+  // every single cart change — checkPromotions is a pure local calculation, free to
+  // include, unlike a real API call.
+  return { success: true, added: cartItem, cart: cartSummary(cart), promotions: checkPromotions(cart) };
 }
 
 function removeFromCart(cart, input) {
@@ -254,11 +259,11 @@ function removeFromCart(cart, input) {
   }
   cart.length = 0;
   cart.push(...filtered);
-  return { success: true, cart: cartSummary(cart) };
+  return { success: true, cart: cartSummary(cart), promotions: checkPromotions(cart) };
 }
 
 function viewCart(cart) {
-  return cartSummary(cart);
+  return { ...cartSummary(cart), promotions: checkPromotions(cart) };
 }
 
 function updateCustomization(cart, input) {
@@ -267,7 +272,7 @@ function updateCustomization(cart, input) {
     return { error: `"${input.item_name}" is not in the cart.` };
   }
   item.customizations = input.customizations || [];
-  return { success: true, updated: item, cart: cartSummary(cart) };
+  return { success: true, updated: item, cart: cartSummary(cart), promotions: checkPromotions(cart) };
 }
 
 function getHoursForDay(date) {
@@ -470,8 +475,6 @@ function executeTool(toolName, input, session) {
       return setDeliveryAddress(session.order, input);
     case 'confirm_order':
       return confirmOrder(session);
-    case 'check_promotions':
-      return checkPromotions(session.cart);
     default:
       return { error: `Unknown tool: ${toolName}` };
   }
@@ -745,7 +748,7 @@ app.post('/chat', async (req, res) => {
 // reply (already spoken right before this) almost always ends with a natural follow-up
 // question of its own, and repeating a generic "What else can I get for you?" on top of
 // that every single turn read as robotic and redundant.
-async function addGather(twiml, promptText, req) {
+async function addGather(twiml, promptText, req, { cache = true, callSid } = {}) {
   const gather = twiml.gather({
     input: 'speech',
     action: '/voice/process-speech',
@@ -755,11 +758,15 @@ async function addGather(twiml, promptText, req) {
     // prompt finished, let alone decide what to say.
     timeout: 10,
     // How long to wait after the caller STOPS talking before deciding they're done —
-    // a separate setting from `timeout` above. Left unset, this defaults to matching
-    // `timeout` (10s), so every reply felt like it was hanging for 10 full seconds
-    // after the caller finished speaking. 'auto' uses Twilio's speech-end detection
-    // instead of a fixed wait, so it reacts as soon as the caller actually pauses.
-    speechTimeout: 'auto',
+    // a separate setting from `timeout` above. Started as 'auto' (Twilio's own
+    // speech-end detection), but real-call testing showed it firing on well under a
+    // second of silence — plenty for quick answers, but it cut callers off mid-thought
+    // while pausing to recall or rephrase something longer, like a delivery address or
+    // phone number, sending Claude a truncated transcript instead of the full one. A
+    // fixed few seconds of silence tolerance (Twilio's own docs suggest this exact fix
+    // for callers getting cut off early) trades a little responsiveness on short replies
+    // for not chopping longer ones apart.
+    speechTimeout: 3,
     // Without this, Twilio only calls `action` when it actually hears something (even a
     // low-confidence guess) — a caller who stays completely silent for the full `timeout`
     // just falls through to whatever TwiML verb comes next in this response, with no way
@@ -769,8 +776,26 @@ async function addGather(twiml, promptText, req) {
   });
   // No beep — <Gather input="speech"> starts listening as soon as this finishes
   // playing, unlike <Record>, so prompts shouldn't promise an audio cue that never comes.
+  //
+  // Nesting the prompt INSIDE <Gather> (rather than playing it as a separate verb
+  // before an empty Gather) is what gives barge-in: Twilio starts its speech recognizer
+  // the moment this verb begins, concurrently with the audio, and cuts the audio short
+  // as soon as it detects the caller talking. A prompt played *before* a separate
+  // <Gather> only starts being listened to once it's already finished — no barge-in.
   if (promptText) {
-    await speak(gather, promptText, { req, cache: true });
+    await speak(gather, promptText, { req, cache, callSid });
+
+    // Stamped so a later barge-in-cutoff check (see isBargeInCutoff in
+    // /voice/process-speech) knows what was playing and roughly when it started — without
+    // this, promptText is just a local parameter that's gone the moment this function
+    // returns, with nothing to replay if noise cuts it short.
+    if (callSid) {
+      const state = getVoiceSession(callSid);
+      state.lastPromptText = promptText;
+      state.lastPromptPlayedAt = Date.now();
+      state.lastPromptEstimatedDurationMs = estimateSpeechDurationMs(promptText);
+      state.lastPromptCache = cache;
+    }
   }
 }
 
@@ -796,18 +821,23 @@ app.post('/voice/incoming', validateTwilioRequest, async (req, res) => {
   // the new call's session before the first turn — the cart/order tools are the source of
   // truth Claude relies on (see runCafeBotTurn), so seeding them here is enough for a
   // `view_cart` mid-call to see the resumed items, no conversation history needed.
+  // Disclosing the AI assistant up front, in the one line guaranteed to run on every
+  // call, rather than leaving it to Claude's own judgment mid-conversation — that was
+  // inconsistent (sometimes disclosed, sometimes not) since nothing told it whether or
+  // when to bring it up. Baking it into the cached greeting means it's said exactly
+  // once, every call, deterministically.
   const resumable = findResumableOrder(from);
-  let greeting = 'Thanks for calling To Try It. What can I get started for you?';
+  let greeting = "Thanks for calling To Try It, you're speaking with our AI ordering assistant. What can I get started for you?";
   if (resumable) {
     const state = getVoiceSession(callSid);
     state.cart = resumable.cart;
     state.order = resumable.order;
-    greeting = "Welcome back to To Try It — looks like you had an order in progress from a moment ago. Want to pick up where you left off, or start fresh?";
+    greeting = "Welcome back to To Try It, you're speaking with our AI ordering assistant — looks like you had an order in progress from a moment ago. Want to pick up where you left off, or start fresh?";
   }
 
   // Spelled phonetically for TTS — Twilio's <Say> reads "2try1t" literally as
   // characters/digits instead of the intended "to try it" pronunciation.
-  await addGather(twiml, greeting, req);
+  await addGather(twiml, greeting, req, { callSid });
 
   // No fallback verb needed here — actionOnEmptyResult (set in addGather) means a total
   // silence timeout still POSTs to /voice/process-speech, same as any other turn.
@@ -830,6 +860,88 @@ const FAREWELL_PHRASES = new Set([
 // to end. Below the threshold it falls through to a normal CafeBot turn instead, where the
 // "unclear speech" prompt guidance asks the caller to repeat themselves.
 const FAREWELL_CONFIDENCE_THRESHOLD = 0.7;
+
+// Nesting prompts inside <Gather> for barge-in (see addGather) means Twilio's speech
+// recognizer is now listening for the entire time the agent is talking, not just during
+// a quiet pause between turns — so background noise or a stray sound mid-reply can end
+// the Gather with a low-confidence, likely-garbage transcript far more often than
+// before. Running a full Claude turn (plus a fresh, uncached ElevenLabs generation) on
+// that would waste an API call every time it happens, so anything below this bar gets a
+// cheap, cached re-prompt instead of ever reaching runCafeBotTurn.
+//
+// This has swung both ways in live testing: 0.4 rejected real order attempts (nothing
+// ever made it into the cart), 0.15 let enough noisy-room garbage through to Claude that
+// it made the noisy-call experience worse, not better. There's no clean signal to split
+// "real but imperfect speech" from "noise that happened to transcribe to something" —
+// Twilio only gives us this one score — so this is a live-tuned middle ground, not a
+// principled number. The console.warn below logs every rejected attempt's actual score,
+// so the next round of real-call testing gives real data to retune this against instead
+// of guessing again.
+const MIN_SPEECH_CONFIDENCE = 0.28;
+
+// Separate, higher bar used only to decide whether a SpeechResult that arrived DURING our
+// own prompt's estimated playback window (see isBargeInCutoff in /voice/process-speech) is
+// a genuine interruption versus background noise that happened to trip Twilio's barge-in
+// listener. Deliberately not reusing MIN_SPEECH_CONFIDENCE — that threshold is tuned for
+// normal order capture (a caller answering a question after the agent finished talking),
+// a different situation with different odds of a low score being real speech.
+const BARGE_IN_RESUME_CONFIDENCE = 0.55;
+
+// A SpeechResult arriving this soon after a prompt starts playing is treated as noise
+// regardless of confidence — a real interruption needs at least a moment for the caller to
+// notice the prompt and start talking, so anything faster is far more likely a line
+// click/echo right as playback begins than an actual word. Twilio's <Gather> has no native
+// "don't arm barge-in yet" option, so this approximates it after the fact using timing.
+const BARGE_IN_GRACE_MS = 500;
+
+// Caps how many times in a row we'll silently replay the same interrupted prompt before
+// saying something. Without this, a persistently noisy environment (a TV, a busy room)
+// could keep tripping the barge-in-cutoff check forever, looping the same sentence and
+// never actually telling the caller anything's wrong.
+const MAX_BARGE_IN_NOISE_STRIKES = 3;
+
+// Rough estimate of how long ElevenLabs' spoken output for `text` will take, used only to
+// tell whether a SpeechResult could have arrived while that audio was still playing (see
+// isBargeInCutoff below) — not exact, just enough to distinguish "this came back while our
+// prompt was almost certainly still going" from "the caller waited for it to finish".
+function estimateSpeechDurationMs(text) {
+  const CHARS_PER_SECOND = 13; // rough natural-speech pace
+  const MIN_DURATION_MS = 900; // floor for very short prompts, plus rough playback-start overhead
+  return Math.max(MIN_DURATION_MS, Math.round((text.length / CHARS_PER_SECOND) * 1000));
+}
+
+// Plays immediately after the caller stops talking, while the real Claude turn (floor of
+// 1.6-4.5s even with the redundant-round-trip fix already in) runs in the background - see
+// pendingVoiceReplies and /voice/continue below. Each phrase is cached like any other
+// static line (see elevenlabs-tts.js), so picking from a pool still costs no extra
+// Claude/TTS work once every phrase has been generated once. A pool instead of one fixed
+// line avoids it reading as repetitive/irritating on calls with several back-and-forths.
+const FILLER_PHRASES = [
+  'One sec.',
+  'Let me check that.',
+  'Just a moment.',
+  'Give me a second.',
+  'Checking that now.',
+  'One moment please.'
+];
+
+// Picks a random filler phrase, avoiding repeating the exact same one twice in a row
+// within the same call - tracked on the voice session state so it resets naturally per
+// call (a fresh session has no lastFiller yet, so the first pick is unconstrained).
+function pickFillerPhrase(state) {
+  const choices = state.lastFiller
+    ? FILLER_PHRASES.filter((phrase) => phrase !== state.lastFiller)
+    : FILLER_PHRASES;
+  const picked = choices[Math.floor(Math.random() * choices.length)];
+  state.lastFiller = picked;
+  return picked;
+}
+
+// Bridges /voice/process-speech (kicks off runCafeBotTurn but returns before it resolves,
+// so the filler can play immediately) and /voice/continue (awaits the same promise once
+// Twilio redirects back after the filler finishes). Keyed by CallSid like voiceSessions -
+// entries are removed as soon as /voice/continue consumes them.
+const pendingVoiceReplies = new Map();
 
 function isFarewell(text, confidence) {
   const normalized = text.toLowerCase().trim().replace(/[.,!?]+$/g, '');
@@ -863,6 +975,12 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   const callSid = req.body.CallSid;
   const from = req.body.From;
 
+  // Diagnostic only, no behavior change - logs every turn's raw transcript and
+  // confidence (not just guard failures, unlike the existing "confidence guard" log
+  // below) so a live-watched test call can show exactly what was heard and where a
+  // "please repeat" reply landed, instead of only the pass/fail outcome.
+  console.log(`[speech] confidence=${req.body.Confidence || 'n/a'} transcript="${speechResult || ''}"`);
+
   if (!speechResult) {
     const state = getVoiceSession(callSid);
     state.silenceStrikes = (state.silenceStrikes || 0) + 1;
@@ -875,8 +993,7 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
     }
 
     const repromptText = SILENCE_REPROMPTS[state.silenceStrikes - 1] || SILENCE_REPROMPTS[SILENCE_REPROMPTS.length - 1];
-    await speak(twiml, repromptText, { req, cache: true });
-    await addGather(twiml, undefined, req);
+    await addGather(twiml, repromptText, req, { callSid });
     res.type('text/xml');
     return res.send(twiml.toString());
   }
@@ -888,11 +1005,54 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   // through to the normal model turn instead, so Claude can respond per the "Ending the
   // Call" prompt rules (still a natural goodbye, but aware of the real order state).
   const existingState = voiceSessions.get(callSid);
+  const state = getVoiceSession(callSid);
 
   // Real speech came back in, so the caller wasn't gone — just paused. Give the next
   // silence its own full grace period rather than picking up where this one left off.
   if (existingState) {
     existingState.silenceStrikes = 0;
+  }
+
+  const speechConfidence = parseFloat(req.body.Confidence);
+
+  // Distinguishes "this SpeechResult arrived while our own prompt was still (or almost
+  // certainly still) playing" — a barge-in cutoff — from "the caller waited for the prompt
+  // to finish, then answered normally". Twilio's webhook doesn't expose this directly, so
+  // it's approximated from timing: addGather stamps lastPromptPlayedAt/
+  // lastPromptEstimatedDurationMs every time a prompt is spoken, and if this result came
+  // back sooner than that estimated duration, our audio was almost certainly still going.
+  const elapsedSincePrompt = state.lastPromptPlayedAt ? Date.now() - state.lastPromptPlayedAt : null;
+  const isBargeInCutoff = elapsedSincePrompt !== null && elapsedSincePrompt < (state.lastPromptEstimatedDurationMs || 0);
+
+  if (isBargeInCutoff) {
+    const withinGraceWindow = elapsedSincePrompt < BARGE_IN_GRACE_MS;
+    const belowResumeConfidence = !Number.isFinite(speechConfidence) || speechConfidence < BARGE_IN_RESUME_CONFIDENCE;
+
+    if (withinGraceWindow || belowResumeConfidence) {
+      state.bargeInNoiseStrikes = (state.bargeInNoiseStrikes || 0) + 1;
+
+      if (state.bargeInNoiseStrikes <= MAX_BARGE_IN_NOISE_STRIKES) {
+        console.warn(
+          `Barge-in cutoff treated as noise (elapsed=${elapsedSincePrompt}ms of ~${state.lastPromptEstimatedDurationMs}ms estimated` +
+          `${withinGraceWindow ? ', within grace window' : ''}, confidence=${Number.isFinite(speechConfidence) ? speechConfidence.toFixed(2) : 'n/a'} ` +
+          `< ${BARGE_IN_RESUME_CONFIDENCE}): "${speechResult}" — replaying "${state.lastPromptText}"`
+        );
+        await addGather(twiml, state.lastPromptText, req, { cache: state.lastPromptCache, callSid });
+        res.type('text/xml');
+        return res.send(twiml.toString());
+      }
+      console.warn(`Barge-in noise strikes exceeded (${state.bargeInNoiseStrikes}) — falling back to normal reprompt.`);
+    }
+  }
+  state.bargeInNoiseStrikes = 0;
+
+  // See MIN_SPEECH_CONFIDENCE above — filters out low-confidence speech for turns that
+  // weren't a barge-in cutoff (the case above already handled that one), same as before.
+  if (Number.isFinite(speechConfidence) && speechConfidence < MIN_SPEECH_CONFIDENCE) {
+    console.warn(`Speech below confidence guard (${speechConfidence.toFixed(2)} < ${MIN_SPEECH_CONFIDENCE}): "${speechResult}"`);
+    await addGather(twiml, "Sorry, I didn't quite catch that — go ahead.", req, { callSid });
+    res.type('text/xml');
+    return res.send(twiml.toString());
   }
 
   const hasUnconfirmedOrder = !!existingState && existingState.cart.length > 0 && !existingState.order.confirmed;
@@ -907,14 +1067,64 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
     return res.send(twiml.toString());
   }
 
-  const state = getVoiceSession(callSid);
-  try {
-    const result = await runCafeBotTurn(state, speechResult, STABLE_SYSTEM_TEXT_VOICE);
-    await speak(twiml, speakable(result.reply), { req, cache: false, callSid });
-  } catch (err) {
-    console.error('Anthropic API error (voice):', err);
-    await speak(twiml, "Sorry, I'm having trouble right now. Please try again in a moment.", { req, cache: true });
+  const claudeStartedAt = Date.now();
+
+  // Kick off the real turn now but don't await it here - the caller already waited
+  // through the whole silence-confirmation window, and Claude's own floor is 1.6-4.5s on
+  // top of that. Respond immediately with a short filler instead, so the wait is
+  // acknowledged instead of silent; /voice/continue picks this same in-flight promise back
+  // up once Twilio finishes playing the filler and redirects back. Starting the call here
+  // (rather than after the filler plays) means the filler doesn't add to the real wait —
+  // it just fills time that was going to pass anyway.
+  const turnPromise = runCafeBotTurn(state, speechResult, STABLE_SYSTEM_TEXT_VOICE)
+    .then((result) => ({ replyText: speakable(result.reply), cacheReply: false }))
+    .catch((err) => {
+      console.error('Anthropic API error (voice):', err);
+      return { replyText: "Sorry, I'm having trouble right now. Please try again in a moment.", cacheReply: true };
+    });
+  pendingVoiceReplies.set(callSid, { turnPromise, state, from, claudeStartedAt });
+
+  // No <Gather> here on purpose - this is a brief acknowledgment, not a real prompt, so
+  // there's nothing useful to listen for yet. That means barge-in is unavailable for this
+  // ~1s stretch, unlike every other prompt in this app; an acceptable trade given how short
+  // it is.
+  await speak(twiml, pickFillerPhrase(state), { req, cache: true });
+  twiml.redirect({ method: 'POST' }, '/voice/continue');
+
+  res.type('text/xml');
+  res.send(twiml.toString());
+});
+
+// Twilio hits this once the filler audio from /voice/process-speech finishes playing (see
+// FILLER_TEXT / pendingVoiceReplies there). By the time this request lands, the Claude call
+// kicked off there has usually already finished or is about to, since it's been running the
+// whole time the filler played plus this redirect's own round-trip - so this is mostly just
+// picking up the result and speaking it, not adding a second wait on top of the filler.
+app.post('/voice/continue', validateTwilioRequest, async (req, res) => {
+  const twiml = new VoiceResponse();
+  const callSid = req.body.CallSid;
+
+  const pending = pendingVoiceReplies.get(callSid);
+  if (!pending) {
+    // Shouldn't normally happen — this route is only ever reached via our own <Redirect>
+    // right after storing the pending promise. Re-prompt rather than erroring out the call
+    // on a stray/duplicate hit.
+    await addGather(twiml, "Sorry, could you say that again?", req, { callSid });
+    res.type('text/xml');
+    return res.send(twiml.toString());
   }
+  pendingVoiceReplies.delete(callSid);
+
+  const { turnPromise, state, from, claudeStartedAt } = pending;
+  const { replyText, cacheReply } = await turnPromise;
+
+  // Pairs with the [speech] log in /voice/process-speech - same diagnostic purpose, so a
+  // "please repeat" reply can be matched back to exactly what was heard and its confidence.
+  console.log(`[reply] "${replyText}"`);
+  // Rough per-turn latency breakdown (Claude here, ElevenLabs generation logged separately
+  // inside addGather/speak) - measured from when speech was confirmed, same as before the
+  // filler was added, so this number is still comparable across both.
+  console.log(`[latency] Claude turn: ${Date.now() - claudeStartedAt}ms`);
 
   // Write-through after every turn, not just on hangup — there's no Twilio status
   // callback wired up to tell this app when a call actually drops, so this is what
@@ -927,9 +1137,10 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   }
 
   // Loop back into another <Gather> so the call keeps going instead of ending after
-  // one exchange — this is what turns it into a real back-and-forth conversation. No
-  // prompt text here: CafeBot's reply just above already carries its own follow-up.
-  await addGather(twiml, undefined, req);
+  // one exchange — this is what turns it into a real back-and-forth conversation.
+  // CafeBot's reply is the Gather's own nested prompt (not a separate <Play> before
+  // it) so the caller can barge in over it, same as every other turn.
+  await addGather(twiml, replyText, req, { cache: cacheReply, callSid });
 
   // No fallback verb needed here — actionOnEmptyResult (set in addGather) means a
   // silence timeout on this gather still POSTs back to /voice/process-speech, where the
