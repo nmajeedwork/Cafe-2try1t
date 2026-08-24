@@ -435,6 +435,11 @@ function setDeliveryAddress(order, input) {
   if (!input.customer_name || !input.phone_number || !input.address) {
     return { error: 'customer_name, phone_number, and address are required.' };
   }
+  const phoneDigits = String(input.phone_number).replace(/\D/g, '');
+  const isValidPhone = phoneDigits.length === 10 || (phoneDigits.length === 11 && phoneDigits.startsWith('1'));
+  if (!isValidPhone) {
+    return { error: `"${input.phone_number}" doesn't look like a complete phone number — please provide a 10-digit number (or 11 digits starting with 1).` };
+  }
   order.deliveryAddress = {
     customerName: input.customer_name,
     phoneNumber: input.phone_number,
@@ -906,9 +911,11 @@ app.post('/voice/incoming', validateTwilioRequest, async (req, res) => {
   res.send(twiml.toString());
 });
 
-// Bare farewells the caller says to end the call themselves — deliberately narrow
-// (whole-utterance match only) so it can't misfire on something like "no thanks" or
-// "nothing else", which are answers to a question, not a request to hang up.
+// Bare farewells the caller says to end the call themselves. Matched either as the
+// whole utterance, or as its trailing clause (see isFarewell below) - deliberately not
+// a substring match anywhere in the sentence, so it can't misfire on something like
+// "no thanks" or "nothing else", which are answers to a question, not a request to
+// hang up.
 const FAREWELL_PHRASES = new Set([
   'bye', 'bye bye', 'goodbye', 'good bye', 'see you', 'see ya', 'take care', 'have a good one'
 ]);
@@ -919,7 +926,14 @@ const FAREWELL_PHRASES = new Set([
 // to land exactly on a short phrase like "bye" would end the call the caller never meant
 // to end. Below the threshold it falls through to a normal CafeBot turn instead, where the
 // "unclear speech" prompt guidance asks the caller to repeat themselves.
-const FAREWELL_CONFIDENCE_THRESHOLD = 0.7;
+//
+// Originally 0.7, but live-call transcripts showed genuine farewells consistently scoring
+// at or below that bar - "Thank you. Bye bye." came back at 0.62, and a "You too. Thank
+// you. Bye. Bye." in an earlier call barely passed at 0.705 - so real goodbyes were falling
+// through to a full Claude turn (plus its filler) as often as they were caught. Lowered to
+// match BARGE_IN_RESUME_CONFIDENCE below, which already represents "trust this is likely
+// real speech, not noise" for a similar purpose elsewhere in this file.
+const FAREWELL_CONFIDENCE_THRESHOLD = 0.55;
 
 // Nesting prompts inside <Gather> for barge-in (see addGather) means Twilio's speech
 // recognizer is now listening for the entire time the agent is talking, not just during
@@ -1004,12 +1018,25 @@ function pickFillerPhrase(state) {
 const pendingVoiceReplies = new Map();
 
 function isFarewell(text, confidence) {
-  const normalized = text.toLowerCase().trim().replace(/[.,!?]+$/g, '');
-  if (!FAREWELL_PHRASES.has(normalized)) {
+  const confidenceValue = parseFloat(confidence);
+  if (!Number.isFinite(confidenceValue) || confidenceValue < FAREWELL_CONFIDENCE_THRESHOLD) {
     return false;
   }
-  const confidenceValue = parseFloat(confidence);
-  return Number.isFinite(confidenceValue) && confidenceValue >= FAREWELL_CONFIDENCE_THRESHOLD;
+  // Collapse all punctuation (not just trailing) so "Bye. Bye." and "bye," both
+  // normalize the same way before matching.
+  const normalized = text.toLowerCase().replace(/[.,!?]+/g, ' ').replace(/\s+/g, ' ').trim();
+  for (const phrase of FAREWELL_PHRASES) {
+    // Whole-utterance match, or the utterance ends with the farewell phrase as its own
+    // trailing clause - e.g. "no that's ok, bye" or "thank you, bye bye" - so a caller
+    // tacking a goodbye onto a sentence still ends the call immediately instead of
+    // falling through to a full (and here, irrelevant) Claude turn plus filler.
+    // Word-boundary anchored via the leading space so it can't match a farewell word
+    // embedded mid-sentence.
+    if (normalized === phrase || normalized.endsWith(` ${phrase}`)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // How many consecutive silent timeouts (no speech captured at all — see
