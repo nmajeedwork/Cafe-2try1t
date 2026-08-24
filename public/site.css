@@ -1,0 +1,221 @@
+* {
+  box-sizing: border-box;
+}
+
+body.site {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #f4ede4;
+  color: #2b1d12;
+}
+
+/* order.html reuses style.css, whose "body" rule sets display:flex (originally to
+   center the single .app card). With the new site-header added as a second top-level
+   child, that flex-row layout would put the header and the widget side by side instead
+   of stacked - this overrides just the axis/alignment (not the margin/background/
+   padding/font that style.css's body rule still supplies) so the two stack vertically,
+   centered, like normal page content. */
+body.order-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+body.order-page .site-header {
+  width: 100%;
+  max-width: 900px;
+  border-radius: 14px 14px 0 0;
+}
+
+.site-header {
+  background: #6f4e37;
+  color: #fff;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.site-header .brand {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.5rem;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  color: #fff;
+}
+
+.site-nav {
+  display: flex;
+  gap: 18px;
+}
+
+.site-nav a {
+  color: #fff;
+  text-decoration: none;
+  font-size: 0.95rem;
+  opacity: 0.85;
+  padding: 6px 2px;
+  border-bottom: 2px solid transparent;
+}
+
+.site-nav a:hover,
+.site-nav a.active {
+  opacity: 1;
+  border-bottom-color: #fff;
+}
+
+.site-main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 24px 48px;
+}
+
+.site-card {
+  background: #fffaf3;
+  border: 1px solid #e5d8c5;
+  border-radius: 14px;
+  box-shadow: 0 4px 20px rgba(76, 52, 30, 0.1);
+  padding: 28px 32px;
+}
+
+.site-hero h1 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 2rem;
+  margin: 0 0 12px;
+  color: #2b1d12;
+}
+
+.site-hero p {
+  color: #7a6650;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.cta-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+
+.cta-button {
+  display: inline-block;
+  padding: 10px 20px;
+  background: #6f4e37;
+  color: #fff;
+  border-radius: 8px;
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.cta-button:hover {
+  background: #5a3e2b;
+}
+
+.cta-button.secondary {
+  background: transparent;
+  color: #6f4e37;
+  border: 1px solid #6f4e37;
+}
+
+.cta-button.secondary:hover {
+  background: #f0e6d8;
+}
+
+/* Menu page */
+.menu-category {
+  margin-bottom: 28px;
+}
+
+.menu-category:last-child {
+  margin-bottom: 0;
+}
+
+.menu-category h2 {
+  font-family: Georgia, "Times New Roman", serif;
+  color: #6f4e37;
+  font-size: 1.2rem;
+  margin: 0 0 12px;
+  border-bottom: 1px solid #e5d8c5;
+  padding-bottom: 6px;
+}
+
+.menu-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f0e6d8;
+}
+
+.menu-item:last-child {
+  border-bottom: none;
+}
+
+.menu-item-name {
+  font-weight: 600;
+  color: #2b1d12;
+}
+
+.menu-item-desc {
+  color: #7a6650;
+  font-size: 0.88rem;
+  margin-top: 2px;
+}
+
+.menu-item-meta {
+  color: #9b8367;
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+
+.menu-item-price {
+  font-weight: 700;
+  color: #6f4e37;
+  white-space: nowrap;
+}
+
+.menu-loading,
+.menu-error {
+  color: #7a6650;
+  font-style: italic;
+  margin: 0;
+}
+
+/* About page */
+.about-section {
+  margin-bottom: 24px;
+}
+
+.about-section:last-child {
+  margin-bottom: 0;
+}
+
+.about-section h2 {
+  font-family: Georgia, "Times New Roman", serif;
+  color: #6f4e37;
+  font-size: 1.15rem;
+  margin: 0 0 8px;
+}
+
+.about-section p {
+  color: #2b1d12;
+  line-height: 1.6;
+  margin: 0 0 6px;
+}
+
+@media (max-width: 700px) {
+  .site-header {
+    padding: 14px 16px;
+  }
+  .site-main {
+    padding: 20px 16px 32px;
+  }
+  .site-card {
+    padding: 20px;
+  }
+}

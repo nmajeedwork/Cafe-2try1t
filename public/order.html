@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Order · 2try1t CafeBot</title>
+  <link rel="stylesheet" href="site.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="order-page">
+  <header class="site-header">
+    <a class="brand" href="/">☕ 2try1t</a>
+    <nav class="site-nav">
+      <a href="/">Home</a>
+      <a href="/menu">Menu</a>
+      <a href="/order" class="active">Order</a>
+      <a href="/about">About</a>
+    </nav>
+  </header>
+
+  <div class="app">
+    <header class="app-header">
+      <div>
+        <h1>☕ 2try1t</h1>
+        <p>Ask CafeBot about our menu, ingredients, or allergens</p>
+      </div>
+      <button id="new-order-btn" class="new-order-btn" type="button">New Order</button>
+    </header>
+
+    <div class="layout">
+      <aside class="cart-panel" id="cart-panel">
+        <h2>Your Order</h2>
+        <div id="cart-items" class="cart-items">
+          <p class="cart-empty">Your cart is empty</p>
+        </div>
+        <div id="cart-totals" class="cart-totals"></div>
+      </aside>
+
+      <div class="chat-panel">
+        <div id="messages" class="messages"></div>
+
+        <form id="chat-form" class="chat-form">
+          <input
+            id="message-input"
+            type="text"
+            placeholder="Ask about the menu..."
+            autocomplete="off"
+            required
+          />
+          <button type="submit">Send</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

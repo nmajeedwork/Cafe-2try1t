@@ -761,6 +761,30 @@ app.use(
 );
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Clean-URL routes for the site's pages. express.static above already serves index.html
+// at "/" via its own default index resolution (no route needed for Home), and would also
+// still serve these files at their raw *.html paths since it's unconditional — these
+// routes just give each page a path that doesn't expose the .html extension.
+app.get('/order', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'order.html'));
+});
+
+app.get('/menu', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'menu.html'));
+});
+
+app.get('/about', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'about.html'));
+});
+
+// Read-only menu data for the new Menu page (menu.js) to render client-side. menu.json is
+// only ever read server-side otherwise (see the require at the top of this file) - this is
+// the same parsed object, just exposed so the static Menu page doesn't have to hardcode a
+// second copy of the menu that could drift from the source of truth.
+app.get('/api/menu', (req, res) => {
+  res.json(menu);
+});
+
 app.post('/chat', async (req, res) => {
   const userMessage = (req.body.message || '').trim();
   if (!userMessage) {
