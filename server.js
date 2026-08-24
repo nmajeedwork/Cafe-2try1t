@@ -20,10 +20,12 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MAX_TOOL_ROUNDS = 6;
 const MAX_RESPONSE_TOKENS = 4096;
 
-// Café operating hours ("HH:MM", 24-hour). Adjust here to change hours everywhere.
+// Café operating hours ("HH:MM", 24-hour). Adjust here to change hours everywhere. Close
+// time may be past midnight (e.g. "02:00") - validateOrderTiming below handles the
+// overnight wraparound.
 const CAFE_HOURS = {
-  weekday: { open: '07:00', close: '20:00' }, // Mon–Fri
-  weekend: { open: '09:00', close: '22:00' } // Sat–Sun
+  weekday: { open: '05:00', close: '02:00' }, // Mon–Fri
+  weekend: { open: '05:00', close: '02:00' } // Sat–Sun
 };
 // New pickup/delivery orders stop being accepted this many minutes before close.
 const CLOSING_BUFFER_MINUTES = 30;
@@ -330,6 +332,28 @@ function parseClockTime(timeStr) {
   return hour * 60 + minute;
 }
 
+// Extends closeMin past 1440 (24:00) when hours cross midnight (e.g. 5am-2am), so the
+// open/close window is a normal increasing range instead of close < open. Any raw
+// minute-of-day being compared against this window must go through normalizeAgainstOpen
+// below so it lands on the same extended scale.
+function getHoursWindow(now) {
+  const hours = getHoursForDay(now);
+  const openMin = timeStringToMinutes(hours.open);
+  let closeMin = timeStringToMinutes(hours.close);
+  if (closeMin <= openMin) {
+    closeMin += 24 * 60;
+  }
+  return { openMin, closeMin };
+}
+
+// A raw minute-of-day (0-1439) that falls before today's open time could actually be in
+// the overnight tail of a window that started yesterday (e.g. 1am with 5am-2am hours is
+// still "open", just past midnight) - shifting it a full day forward puts it on the same
+// scale as the extended closeMin from getHoursWindow so the comparison works either way.
+function normalizeAgainstOpen(rawMin, openMin) {
+  return rawMin < openMin ? rawMin + 24 * 60 : rawMin;
+}
+
 function validateOrderTiming(orderType, pickupTimeStr) {
   // Dev-only override for testing outside real café hours — never set in committed
   // config, .env is gitignored. Remove this env var to restore normal hours enforcement.
@@ -337,16 +361,23 @@ function validateOrderTiming(orderType, pickupTimeStr) {
     return { ok: true };
   }
 
+  // Dev-only override for the opposite case — forces every hours check to report closed,
+  // regardless of the actual time. Lets the "closed" flow (both the upfront check and the
+  // pickup-time-specific one) be retested on demand instead of only during the real
+  // closed window. Never set in committed config, .env is gitignored.
+  if (process.env.FORCE_HOURS_CLOSED === 'true') {
+    return { error: `Sorry, we're closed right now (testing override) — we'd normally open at ${getNextOpeningLabel(new Date())}.` };
+  }
+
   const now = new Date();
-  const todayHours = getHoursForDay(now);
-  const openMin = timeStringToMinutes(todayHours.open);
-  const closeMin = timeStringToMinutes(todayHours.close);
+  const { openMin, closeMin } = getHoursWindow(now);
   const cutoffMin = closeMin - CLOSING_BUFFER_MINUTES;
 
   // Delivery, or pickup with no specific time yet: validate against the current moment.
   // New orders stop being accepted once we're within the closing buffer.
   if (orderType === 'delivery' || !pickupTimeStr) {
-    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const rawNowMin = now.getHours() * 60 + now.getMinutes();
+    const nowMin = normalizeAgainstOpen(rawNowMin, openMin);
     if (nowMin < openMin || nowMin >= cutoffMin) {
       const closedFor = orderType === 'delivery'
         ? "delivery isn't available right now"
@@ -361,7 +392,8 @@ function validateOrderTiming(orderType, pickupTimeStr) {
   if (parsed === null) {
     return { error: `I couldn't understand the pickup time "${pickupTimeStr}". Could you give a time like "6:15 PM"?` };
   }
-  const targetMin = parsed === 'now' ? now.getHours() * 60 + now.getMinutes() : parsed;
+  const rawTargetMin = parsed === 'now' ? now.getHours() * 60 + now.getMinutes() : parsed;
+  const targetMin = normalizeAgainstOpen(rawTargetMin, openMin);
   // The cutoff itself is still an acceptable pickup slot — it's the LAST acceptable time.
   if (targetMin < openMin || targetMin > cutoffMin) {
     return {
@@ -687,6 +719,10 @@ if (!process.env.ELEVENLABS_API_KEY || !process.env.ELEVENLABS_VOICE_ID) {
 
 if (process.env.DISABLE_HOURS_CHECK === 'true') {
   console.warn('Warning: DISABLE_HOURS_CHECK=true — café operating hours are NOT being enforced. Dev/testing only.');
+}
+
+if (process.env.FORCE_HOURS_CLOSED === 'true') {
+  console.warn('Warning: FORCE_HOURS_CLOSED=true — every hours check will report closed. Dev/testing only.');
 }
 
 // Confirms an incoming request to /voice/incoming genuinely came from Twilio, by
