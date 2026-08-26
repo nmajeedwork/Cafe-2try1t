@@ -73,3 +73,4 @@ Using Twilio Voice. Broken into sub-milestones:
 
 * Create milestone-scoped system prompt files proactively/upfront when planning a multi-stage build, not reactively after a mismatch is discovered — this already caused rework once (Milestones 3–5 prompts had to be created retroactively).
 * Environment setup (Node.js, git init) should be verified early in a new environment before assuming tooling is available.
+* Third-party skills, plugins, and connectors get trialled in a scratch project first — never introduced into a repo that has already passed a testing round. Evaluate what a skill actually installs (how many skills ship in the bundle, what scripts it runs, what files it can read, whether anything runs automatically) before it touches working code.
