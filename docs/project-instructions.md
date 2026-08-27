@@ -38,7 +38,7 @@ Nmajeed is building an AI ordering agent ("CafeBot") for a café called 2try1t, 
 
 ### Key locked-in business logic
 
-* Operating hours: Mon–Fri 7am–8pm, Sat–Sun 9am–10pm, with a 30-minute last-order buffer before closing (applies to both pickup and delivery)
+* Operating hours: 5:00 AM – 2:00 AM, all days (Mon–Sun), with a 30-minute last-order buffer before closing (applies to both pickup and delivery)
 * BOGO deals discount the cheaper of the two qualifying items
 * Only the single best promotion applies per order — no stacking
 * Pickup validation uses customer-specified time; delivery validation uses current server time
