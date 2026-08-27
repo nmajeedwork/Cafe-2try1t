@@ -22,6 +22,7 @@ Nmajeed is building an AI ordering agent ("CafeBot") for a café called 2try1t, 
 * Prefer receiving one milestone's instructions at a time, not the full roadmap dumped at once.
 * Business logic decisions (deal stacking rules, validation behavior, etc.) should be confirmed with Nmajeed before implementation, not assumed.
 * Server-side/tool-level validation is preferred over relying on prompt instructions alone for anything safety- or accuracy-critical (pricing, totals, hours validation, order confirmation gating).
+* Claude Code must always work directly in the project folder — never create worktrees or separate checkouts, even for read-only audits. Use `git show` / `git diff` / `git log` instead if inspection without disturbing the working tree is needed. This caused a real mix-up once (an audit run in a separate worktree reported the repo as clean while uncommitted work sat untouched in the real folder).
 
 ## Project Status (update as milestones complete)
 
