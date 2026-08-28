@@ -10,11 +10,11 @@ body.site {
 }
 
 /* order.html reuses style.css, whose "body" rule sets display:flex (originally to
-   center the single .app card). With the new site-header added as a second top-level
-   child, that flex-row layout would put the header and the widget side by side instead
-   of stacked - this overrides just the axis/alignment (not the margin/background/
-   padding/font that style.css's body rule still supplies) so the two stack vertically,
-   centered, like normal page content. */
+   center the single .app card). With the site-wide .navbar added as a second
+   top-level child, that flex-row layout would put the nav and the widget side by
+   side instead of stacked - this overrides just the axis/alignment (not the
+   margin/background/padding/font that style.css's body rule still supplies) so the
+   two stack vertically, centered, like normal page content. */
 body.order-page {
   display: flex;
   flex-direction: column;
@@ -22,49 +22,10 @@ body.order-page {
   justify-content: flex-start;
 }
 
-body.order-page .site-header {
+/* Keep the nav aligned to the chat-app card width on the Order page. */
+body.order-page .navbar {
   width: 100%;
   max-width: 900px;
-  border-radius: 14px 14px 0 0;
-}
-
-.site-header {
-  background: #6f4e37;
-  color: #fff;
-  padding: 16px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.site-header .brand {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 1.5rem;
-  letter-spacing: 0.02em;
-  text-decoration: none;
-  color: #fff;
-}
-
-.site-nav {
-  display: flex;
-  gap: 18px;
-}
-
-.site-nav a {
-  color: #fff;
-  text-decoration: none;
-  font-size: 0.95rem;
-  opacity: 0.85;
-  padding: 6px 2px;
-  border-bottom: 2px solid transparent;
-}
-
-.site-nav a:hover,
-.site-nav a.active {
-  opacity: 1;
-  border-bottom-color: #fff;
 }
 
 .site-main {
@@ -209,9 +170,6 @@ body.order-page .site-header {
 }
 
 @media (max-width: 700px) {
-  .site-header {
-    padding: 14px 16px;
-  }
   .site-main {
     padding: 20px 16px 32px;
   }
@@ -221,17 +179,25 @@ body.order-page .site-header {
 }
 
 /* ============================================================================
-   HOME PAGE — Phase 3 premium redesign (2026-08)
+   PREMIUM REDESIGN — Phase 3 (2026-08)
 
-   Everything below is scoped under `body.home` / `.home` / `.home-nav` /
-   `.home-footer`. The Menu, Order, and About pages share this stylesheet but
-   use `body.site` + `.site-header` / `.site-nav` / `.menu-*` / `.about-*`
-   (all untouched above), so this block does not affect them.
+   Two parts:
 
-   Colour + type come from tokens.css. Design rules: sharp corners everywhere;
-   pill buttons are the only rounded element; the sole gradient is the hero
-   readability overlay; no decorative shadows; straight section cuts; no
-   animation on load — transitions are hover-only and motion-guarded.
+   1. SHARED across all four pages (Phase 3b): the `.navbar` block plus the
+      `.btn` pill system it uses. These are NOT scoped to `.home`, so the Menu,
+      Order, and About pages now get the same cream nav. Everything else on
+      those pages is still styled by the `body.site` / `.menu-*` / `.about-*` /
+      `style.css` rules above and is untouched.
+
+   2. HOME-ONLY: everything under `body.home` / `.home` / `.home-footer`, i.e.
+      the hero, featured grid, story, preview, visit, footer. Other pages don't
+      carry the `home` class so none of it applies to them.
+
+   Colour + type come from tokens.css (now loaded on all four pages). Design
+   rules: sharp corners everywhere; pill buttons are the only rounded element;
+   the sole gradient is the hero readability overlay; no decorative shadows;
+   straight section cuts; no animation on load. Transitions are hover-only and
+   motion-guarded.
    ========================================================================= */
 
 body.home {
@@ -279,11 +245,13 @@ body.home {
 
 /* --- Focus states (visible on every link + button) --- */
 .home a:focus-visible,
-.home button:focus-visible {
+.home button:focus-visible,
+.navbar a:focus-visible,
+.navbar button:focus-visible {
   outline: 3px solid var(--color-accent);
   outline-offset: 3px;
 }
-.home .btn--solid:focus-visible {
+.btn--solid:focus-visible {
   outline-color: var(--color-ink);
 }
 
@@ -311,8 +279,9 @@ body.home {
   margin: 0 0 28px;
 }
 
-/* --- Buttons (pill — the one rounded element) --- */
-.home .btn {
+/* --- Buttons (pill — the one rounded element). Shared: Home content + the
+   site-wide nav CTA on every page. --- */
+.btn {
   display: inline-block;
   font-family: var(--font-body);
   font-size: 0.9rem;
@@ -324,36 +293,37 @@ body.home {
   text-decoration: none;
   cursor: pointer;
 }
-.home .btn--solid {
+.btn--solid {
   background: var(--color-accent);
   border-color: var(--color-accent);
   color: #fff;
 }
-.home .btn--solid:hover {
+.btn--solid:hover {
   background: var(--color-ink);
   border-color: var(--color-ink);
 }
-.home .btn--outline {
+.btn--outline {
   background: transparent;
   border-color: var(--color-ink);
   color: var(--color-ink);
 }
-.home .btn--outline:hover {
+.btn--outline:hover {
   background: var(--color-ink);
   color: var(--color-bg);
 }
-.home .btn-row {
+.btn-row {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
 }
 
-/* --- NAV --- */
-.home-nav {
+/* --- SITE NAV (shared by all four pages, Phase 3b) --- */
+.navbar {
   background: var(--color-bg);
   border-bottom: 1px solid var(--color-tan);
+  font-family: var(--font-body);
 }
-.home-nav__inner {
+.navbar__inner {
   max-width: 1100px;
   margin: 0 auto;
   padding: 18px 24px;
@@ -362,7 +332,7 @@ body.home {
   justify-content: space-between;
   gap: 16px;
 }
-.home-nav__brand {
+.navbar__brand {
   font-family: var(--font-display);
   font-weight: 700;
   font-size: clamp(1.7rem, 2.4vw, 2.1rem);
@@ -370,12 +340,12 @@ body.home {
   text-decoration: none;
   color: var(--color-ink);
 }
-.home-nav__menu {
+.navbar__menu {
   display: flex;
   align-items: center;
   gap: 26px;
 }
-.home-nav__menu > a:not(.btn) {
+.navbar__menu > a:not(.btn) {
   font-size: 0.78rem;
   font-weight: 600;
   letter-spacing: 0.12em;
@@ -385,20 +355,20 @@ body.home {
   padding: 4px 0;
   border-bottom: 2px solid transparent;
 }
-.home-nav__menu > a:not(.btn):hover {
+.navbar__menu > a:not(.btn):hover {
   color: var(--color-ink);
 }
-.home-nav__menu > a[aria-current="page"] {
+.navbar__menu > a[aria-current="page"] {
   color: var(--color-ink);
   border-bottom-color: var(--color-accent);
 }
-.home-nav__menu .btn {
+.navbar__menu .btn {
   padding: 10px 20px;
   font-size: 0.78rem;
 }
 
 /* Hamburger — hidden on desktop */
-.home-nav__toggle {
+.navbar__toggle {
   display: none;
   flex-direction: column;
   gap: 5px;
@@ -407,20 +377,20 @@ body.home {
   border: 0;
   cursor: pointer;
 }
-.home-nav__toggle-bar {
+.navbar__toggle-bar {
   width: 24px;
   height: 2px;
   background: var(--color-ink);
 }
 
 @media (max-width: 760px) {
-  .home-nav__inner {
+  .navbar__inner {
     flex-wrap: wrap;
   }
-  .home-nav__toggle {
+  .navbar__toggle {
     display: flex;
   }
-  .home-nav__menu {
+  .navbar__menu {
     display: none;
     flex-basis: 100%;
     flex-direction: column;
@@ -428,10 +398,10 @@ body.home {
     gap: 16px;
     padding-top: 14px;
   }
-  .home-nav__menu.is-open {
+  .navbar__menu.is-open {
     display: flex;
   }
-  .home-nav__menu .btn {
+  .navbar__menu .btn {
     align-self: stretch;
     text-align: center;
   }
@@ -701,8 +671,8 @@ body.home {
 
 /* --- Motion: hover-only transitions, disabled when the user asks --- */
 @media (prefers-reduced-motion: no-preference) {
-  .home .btn,
-  .home .home-nav__menu > a:not(.btn) {
+  .btn,
+  .navbar__menu > a:not(.btn) {
     transition: background-color 0.18s ease, color 0.18s ease,
       border-color 0.18s ease;
   }

@@ -13,28 +13,28 @@
 <body class="home">
   <a class="skip-link" href="#main">Skip to content</a>
 
-  <header class="home-nav">
-    <div class="home-nav__inner">
-      <a class="home-nav__brand" href="/">2try1t</a>
+  <header class="navbar">
+    <div class="navbar__inner">
+      <a class="navbar__brand" href="/">2try1t</a>
 
       <button
-        class="home-nav__toggle"
+        class="navbar__toggle"
         type="button"
         aria-expanded="false"
-        aria-controls="home-nav-menu"
+        aria-controls="navbar-menu"
         aria-label="Open navigation menu"
       >
-        <span class="home-nav__toggle-bar"></span>
-        <span class="home-nav__toggle-bar"></span>
-        <span class="home-nav__toggle-bar"></span>
+        <span class="navbar__toggle-bar"></span>
+        <span class="navbar__toggle-bar"></span>
+        <span class="navbar__toggle-bar"></span>
       </button>
 
-      <nav class="home-nav__menu" id="home-nav-menu" aria-label="Primary">
+      <nav class="navbar__menu" id="navbar-menu" aria-label="Primary">
         <a href="/" aria-current="page">Home</a>
         <a href="/menu">Menu</a>
         <a href="/order">Order</a>
         <a href="/about">About</a>
-        <a class="btn btn--solid home-nav__cta" href="/order">Start an Order</a>
+        <a class="btn btn--solid navbar__cta" href="/order">Start an Order</a>
       </nav>
     </div>
   </header>
@@ -126,23 +126,10 @@
     <p>2try1t &middot; Winnipeg, MB &middot; © 2026</p>
   </footer>
 
+  <script src="nav.js"></script>
   <script>
     (function () {
-      // --- Mobile nav toggle ---
-      var toggle = document.querySelector('.home-nav__toggle');
-      var menu = document.getElementById('home-nav-menu');
-      if (toggle && menu) {
-        toggle.addEventListener('click', function () {
-          var open = menu.classList.toggle('is-open');
-          toggle.setAttribute('aria-expanded', String(open));
-          toggle.setAttribute(
-            'aria-label',
-            open ? 'Close navigation menu' : 'Open navigation menu'
-          );
-        });
-      }
-
-      // --- Featured items: first 3 from the live menu API ---
+      // --- Featured items: three specific items, data pulled live from the menu API ---
       var grid = document.getElementById('featured-grid');
       if (!grid) return;
 
