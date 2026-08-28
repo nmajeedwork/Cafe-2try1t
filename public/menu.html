@@ -4,17 +4,37 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Menu · 2try1t Café</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="tokens.css" />
   <link rel="stylesheet" href="site.css" />
 </head>
 <body class="site">
-  <header class="site-header">
-    <a class="brand" href="/">☕ 2try1t</a>
-    <nav class="site-nav">
-      <a href="/">Home</a>
-      <a href="/menu" class="active">Menu</a>
-      <a href="/order">Order</a>
-      <a href="/about">About</a>
-    </nav>
+  <header class="navbar">
+    <div class="navbar__inner">
+      <a class="navbar__brand" href="/">2try1t</a>
+
+      <button
+        class="navbar__toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="navbar-menu"
+        aria-label="Open navigation menu"
+      >
+        <span class="navbar__toggle-bar"></span>
+        <span class="navbar__toggle-bar"></span>
+        <span class="navbar__toggle-bar"></span>
+      </button>
+
+      <nav class="navbar__menu" id="navbar-menu" aria-label="Primary">
+        <a href="/">Home</a>
+        <a href="/menu" aria-current="page">Menu</a>
+        <a href="/order">Order</a>
+        <a href="/about">About</a>
+        <a class="btn btn--solid navbar__cta" href="/order">Start an Order</a>
+      </nav>
+    </div>
   </header>
 
   <main class="site-main">
@@ -25,6 +45,7 @@
     </div>
   </main>
 
+  <script src="nav.js"></script>
   <script src="menu.js"></script>
 </body>
 </html>
