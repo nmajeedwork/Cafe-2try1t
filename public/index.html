@@ -3,29 +3,203 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>2try1t Café</title>
+  <title>2try1t · Winnipeg Neighbourhood Café</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="tokens.css" />
   <link rel="stylesheet" href="site.css" />
 </head>
-<body class="site">
-  <header class="site-header">
-    <a class="brand" href="/">☕ 2try1t</a>
-    <nav class="site-nav">
-      <a href="/" class="active">Home</a>
-      <a href="/menu">Menu</a>
-      <a href="/order">Order</a>
-      <a href="/about">About</a>
-    </nav>
+<body class="home">
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="home-nav">
+    <div class="home-nav__inner">
+      <a class="home-nav__brand" href="/">2try1t</a>
+
+      <button
+        class="home-nav__toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="home-nav-menu"
+        aria-label="Open navigation menu"
+      >
+        <span class="home-nav__toggle-bar"></span>
+        <span class="home-nav__toggle-bar"></span>
+        <span class="home-nav__toggle-bar"></span>
+      </button>
+
+      <nav class="home-nav__menu" id="home-nav-menu" aria-label="Primary">
+        <a href="/" aria-current="page">Home</a>
+        <a href="/menu">Menu</a>
+        <a href="/order">Order</a>
+        <a href="/about">About</a>
+        <a class="btn btn--solid home-nav__cta" href="/order">Start an Order</a>
+      </nav>
+    </div>
   </header>
 
-  <main class="site-main">
-    <div class="site-card site-hero">
-      <h1>Welcome to 2try1t</h1>
-      <p>Fresh coffee, tea, and café favorites — order online for pickup or delivery, any time of day.</p>
-      <div class="cta-row">
-        <a class="cta-button" href="/order">Start an Order</a>
-        <a class="cta-button secondary" href="/menu">View Menu</a>
+  <main id="main">
+    <!-- HERO -->
+    <section class="hero">
+      <div class="hero__photo" role="img" aria-label="Placeholder for a café photograph"></div>
+      <div class="hero__overlay" aria-hidden="true"></div>
+      <div class="hero__content">
+        <div class="hero__frame">
+          <p class="eyebrow">Winnipeg &middot; Neighbourhood Café</p>
+          <h1 class="hero__title">Try it once. Come back for the second.</h1>
+          <p class="hero__text">
+            Order a coffee, a sandwich, or the whole tray by chat or over the phone.
+            No app, no account, just tell us what you want.
+          </p>
+          <div class="btn-row">
+            <a class="btn btn--solid" href="/order">Start an Order</a>
+            <a class="btn btn--outline" href="/menu">View Menu</a>
+          </div>
+        </div>
       </div>
-    </div>
+    </section>
+
+    <!-- FEATURED ITEMS -->
+    <section class="section featured">
+      <p class="section-tag">From the Menu</p>
+      <h2 class="section-heading">A few favourites</h2>
+      <div class="featured__grid" id="featured-grid">
+        <p class="featured__status">Loading favourites…</p>
+      </div>
+    </section>
+
+    <!-- BRAND STORY -->
+    <section class="story">
+      <div class="story__grid">
+        <div class="story__photo" role="img" aria-label="Placeholder for an interior photograph of the café"></div>
+        <div class="story__body">
+          <p class="section-tag">Our Story</p>
+          <h2 class="section-heading">A neighbourhood café</h2>
+          <p class="story__text">
+            2try1t is a neighborhood café serving coffee, tea, pastries, and
+            sandwiches. Made fresh, ordered your way, for pickup or delivery.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- AI ORDERING PREVIEW -->
+    <section class="preview">
+      <div class="preview__wrap">
+        <p class="section-tag">How It Works</p>
+        <h2 class="section-heading">Order by chat, in your own words.</h2>
+        <figure class="preview__fig">
+          <div class="preview__chat">
+            <p class="bubble bubble--in">Hi! What can I get started for you?</p>
+            <p class="bubble bubble--out">A large oat latte and a butter croissant, for pickup.</p>
+            <p class="bubble bubble--in">Got it. One large oat-milk latte and a butter croissant for pickup. Anything else?</p>
+          </div>
+          <figcaption class="preview__note">
+            Illustration only. The live assistant is on the order page.
+          </figcaption>
+        </figure>
+        <div class="btn-row">
+          <a class="btn btn--solid" href="/order">Start an Order</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- VISIT / HOURS -->
+    <section class="visit">
+      <div class="visit__grid">
+        <div class="visit__col">
+          <p class="section-tag">Visit</p>
+          <p class="visit__line">123 Main Street</p>
+          <p class="visit__line">Winnipeg, MB</p>
+          <p class="visit__line"><a href="tel:+15551234567">(555) 123-4567</a></p>
+        </div>
+        <div class="visit__col">
+          <p class="section-tag">Hours</p>
+          <p class="visit__line visit__hours">5:00 AM – 2:00 AM, every day</p>
+        </div>
+      </div>
+    </section>
   </main>
+
+  <footer class="home-footer">
+    <p>2try1t &middot; Winnipeg, MB &middot; © 2026</p>
+  </footer>
+
+  <script>
+    (function () {
+      // --- Mobile nav toggle ---
+      var toggle = document.querySelector('.home-nav__toggle');
+      var menu = document.getElementById('home-nav-menu');
+      if (toggle && menu) {
+        toggle.addEventListener('click', function () {
+          var open = menu.classList.toggle('is-open');
+          toggle.setAttribute('aria-expanded', String(open));
+          toggle.setAttribute(
+            'aria-label',
+            open ? 'Close navigation menu' : 'Open navigation menu'
+          );
+        });
+      }
+
+      // --- Featured items: first 3 from the live menu API ---
+      var grid = document.getElementById('featured-grid');
+      if (!grid) return;
+
+      fetch('/api/menu')
+        .then(function (res) {
+          if (!res.ok) throw new Error('Menu request failed');
+          return res.json();
+        })
+        .then(function (items) {
+          if (!Array.isArray(items) || items.length === 0) {
+            throw new Error('Menu was empty');
+          }
+          // Featured items are picked by exact name; data (price, description,
+          // etc.) still comes live from /api/menu.
+          var FEATURED_NAMES = ['Iced Matcha Latte', 'Blueberry Muffin', 'Avocado Toast'];
+          var featured = FEATURED_NAMES
+            .map(function (wanted) {
+              var match = items.find(function (item) { return item.name === wanted; });
+              if (!match) {
+                console.warn("Featured item '" + wanted + "' not found in menu.json");
+              }
+              return match;
+            })
+            .filter(Boolean);
+          if (featured.length === 0) {
+            throw new Error('No featured items matched');
+          }
+          grid.innerHTML = '';
+          featured.forEach(function (item) {
+            var card = document.createElement('article');
+            card.className = 'featured__card';
+
+            var photo = document.createElement('div');
+            photo.className = 'featured__photo';
+            photo.setAttribute('role', 'img');
+            photo.setAttribute('aria-label', 'Placeholder photo of ' + item.name);
+
+            var name = document.createElement('h3');
+            name.className = 'featured__name';
+            name.textContent = item.name;
+
+            var desc = document.createElement('p');
+            desc.className = 'featured__desc';
+            desc.textContent = item.description || '';
+
+            card.appendChild(photo);
+            card.appendChild(name);
+            card.appendChild(desc);
+            grid.appendChild(card);
+          });
+        })
+        .catch(function () {
+          grid.innerHTML =
+            '<p class="featured__status">We couldn’t load the menu just now. ' +
+            '<a href="/menu">See the full menu</a>.</p>';
+        });
+    })();
+  </script>
 </body>
 </html>

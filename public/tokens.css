@@ -1,0 +1,20 @@
+/* tokens.css — design tokens for the 2try1t site
+   Introduced in the Phase 3 Home-page redesign. Loaded before site.css.
+   Only the Home page consumes these today; later phases will migrate the
+   other pages onto the same tokens. */
+
+:root {
+  /* Colour */
+  --color-bg: #F7F1E4;        /* page background, cream */
+  --color-tan: #C9B89A;       /* story / visit-hours section background */
+  --color-tan-dark: #b8a586;  /* footer background */
+  --color-ink: #2B1D12;       /* primary text */
+  --color-ink-muted: #4A3A2A; /* secondary text */
+  --color-muted-2: #5c4c3a;   /* tertiary text, e.g. hours labels */
+  --color-accent: #6B4F3B;    /* buttons, section tags */
+  --color-accent-2: #8A6D4F;  /* eyebrow text, lighter accent */
+
+  /* Type */
+  --font-display: 'Fraunces', Georgia, serif;                 /* weight 600/700, headings */
+  --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
