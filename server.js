@@ -625,14 +625,25 @@ function initSessionState(state) {
 // This is the deterministic backstop: it runs on the reply text on its way out, for
 // browser chat and voice alike. Conversation history keeps the model's original
 // wording - only what the user sees or hears is normalised.
-//   - "2try1t" is left alone (the voice path's speakable() handles the brand name).
+//   - the order confirmation ID (2TRY1T-XXXXXX) is protected first: whatever dash the
+//     model put in it is forced back to a plain hyphen, so the rules below can't turn
+//     it into "2TRY1T, XXXXXX". A garbled confirmation number is worse than a stray dash.
+//   - "2try1t" (the brand name) is otherwise left alone; the voice path's speakable()
+//     handles its pronunciation.
 //   - a dash between two number-ish tokens is a range ("2-3", "5:00 AM-2:00 AM",
 //     "$4-$6") and becomes a plain hyphen.
 //   - any other dash is being used as a connector and becomes a comma, which is the
 //     right call the large majority of the time; the prompt instruction covers the rest.
 const NUMISH = '\\$?\\d[\\d:.,]*(?:\\s?[AaPp][Mm])?';
+// generateOrderId() emits "2TRY1T-" + up to 6 base-36 chars, upper-cased, with no
+// spaces around the hyphen. Match that shape - prefix, then any dash (hyphen, en, or
+// em) directly against it, then the code - case-insensitively, with a slack length
+// bound so a short or lower-cased echo still counts. No \s* around the dash: that is
+// what keeps a spaced brand-name dash ("2try1t — what can I get you?") from matching.
+const ORDER_ID_DASH = /(2TRY1T)[-–—]([0-9A-Za-z]{2,12})/gi;
 function plainDashes(text) {
   return text
+    .replace(ORDER_ID_DASH, '$1-$2')
     .replace(new RegExp(`(${NUMISH})\\s*[–—]\\s*(${NUMISH})`, 'g'), '$1-$2')
     .replace(/\s*[–—]\s*/g, ', ')
     .replace(/ +,/g, ',');
