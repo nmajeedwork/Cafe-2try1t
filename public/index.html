@@ -9,6 +9,14 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" />
   <link rel="stylesheet" href="tokens.css" />
   <link rel="stylesheet" href="site.css" />
+  <!-- Phase 4: opt into the scroll-reveal start state before first paint (no
+       flash), then back out on load if reveal.js never confirmed it ran. -->
+  <script>
+    document.documentElement.classList.add('js-reveal');
+    addEventListener('load', function () {
+      if (!window.__revealReady) document.documentElement.classList.remove('js-reveal');
+    });
+  </script>
 </head>
 <body class="home">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -127,6 +135,7 @@
   </footer>
 
   <script src="nav.js"></script>
+  <script src="reveal.js"></script>
   <script>
     (function () {
       // --- Featured items: three specific items, data pulled live from the menu API ---

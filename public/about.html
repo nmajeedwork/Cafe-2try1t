@@ -9,8 +9,18 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" />
   <link rel="stylesheet" href="tokens.css" />
   <link rel="stylesheet" href="site.css" />
+  <!-- Phase 4: opt into the scroll-reveal start state before first paint (no
+       flash), then back out on load if reveal.js never confirmed it ran. -->
+  <script>
+    document.documentElement.classList.add('js-reveal');
+    addEventListener('load', function () {
+      if (!window.__revealReady) document.documentElement.classList.remove('js-reveal');
+    });
+  </script>
 </head>
-<body class="site">
+<body class="page page--about">
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="navbar">
     <div class="navbar__inner">
       <a class="navbar__brand" href="/">2try1t</a>
@@ -37,25 +47,41 @@
     </div>
   </header>
 
-  <main class="site-main">
-    <div class="site-card">
-      <section class="about-section">
-        <h2>About 2try1t</h2>
-        <p>2try1t is a neighborhood café serving coffee, tea, pastries, and sandwiches — made fresh, ordered your way, for pickup or delivery.</p>
-      </section>
-      <section class="about-section">
-        <h2>Hours</h2>
-        <p>Open daily, 5:00 AM – 2:00 AM.</p>
-      </section>
-      <section class="about-section">
-        <h2>Contact</h2>
-        <p>Phone: (555) 123-4567</p>
-        <p>Email: hello@2try1t.example</p>
-        <p>Address: 123 Main Street</p>
-      </section>
-    </div>
+  <main class="page__main" id="main">
+    <header class="page-header">
+      <p class="page-header__eyebrow">About</p>
+      <h1 class="page-header__title">A neighbourhood café</h1>
+      <p class="page-header__lede">
+        2try1t is a neighborhood café serving coffee, tea, pastries, and
+        sandwiches. Made fresh, ordered your way, for pickup or delivery.
+      </p>
+    </header>
+
+    <section class="about-grid" aria-label="Visit and contact details">
+      <div class="about-block">
+        <p class="about-block__label">Visit</p>
+        <p class="about-line">123 Main Street</p>
+        <p class="about-line">Winnipeg, MB</p>
+      </div>
+
+      <div class="about-block">
+        <p class="about-block__label">Hours</p>
+        <p class="about-line about-line--strong">5:00 AM – 2:00 AM, every day</p>
+      </div>
+
+      <div class="about-block">
+        <p class="about-block__label">Contact</p>
+        <p class="about-line"><a href="tel:+15551234567">(555) 123-4567</a></p>
+        <p class="about-line"><a href="mailto:hello@2try1t.example">hello@2try1t.example</a></p>
+      </div>
+    </section>
   </main>
 
+  <footer class="page-footer">
+    <p>2try1t &middot; Winnipeg, MB &middot; © 2026</p>
+  </footer>
+
   <script src="nav.js"></script>
+  <script src="reveal.js"></script>
 </body>
 </html>
