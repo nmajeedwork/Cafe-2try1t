@@ -395,7 +395,10 @@ body.home {
   text-transform: uppercase;
   text-decoration: none;
   color: var(--color-ink-muted);
-  padding: 4px 0;
+  /* Phase 5: 12px block padding (was 4px) lifts the tap target to ~44px tall
+     without changing text size. The 2px underline still sits on the padding-box
+     edge, just lower relative to the text. */
+  padding: 12px 0;
   border-bottom: 2px solid transparent;
 }
 /* Phase 4: hover state also grows the underline (the transition that makes it
@@ -419,7 +422,10 @@ body.home {
   display: none;
   flex-direction: column;
   gap: 5px;
-  padding: 8px;
+  /* Phase 5: the bar stack is 24px wide and 16px tall (3x 2px bars + 2x 5px
+     gaps). 14px block / 10px inline padding brings the button to a true
+     44x44 tap target. */
+  padding: 14px 10px;
   background: none;
   border: 0;
   cursor: pointer;

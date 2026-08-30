@@ -295,7 +295,9 @@ body {
 
 #message-input {
   flex: 1;
-  padding: 10px 12px;
+  /* Phase 5: 12px block padding (was 10px) so the field and Send button clear
+     ~44px tall. Kept identical on both so they stay the same height. */
+  padding: 12px 12px;
   border: 1px solid var(--color-ink);
   border-radius: 0;
   font-size: 1rem;
@@ -314,7 +316,7 @@ body {
 }
 
 .chat-form button {
-  padding: 10px 22px;
+  padding: 12px 22px;
   background: var(--color-accent);
   color: #fff;
   border: 2px solid var(--color-accent);
@@ -362,7 +364,11 @@ body {
 
 /* --- Responsive: stack cart above chat on smaller screens --- */
 
-@media (max-width: 700px) {
+/* Phase 5: 760px matches the navbar's hamburger breakpoint in site.css, so the
+   widget stacks to its mobile layout at the same width the nav collapses -
+   previously 700px, which left a 60px band (701-760) with a mobile hamburger
+   but the desktop side-by-side widget. */
+@media (max-width: 760px) {
   body {
     padding: 0;
     min-height: 100vh;
