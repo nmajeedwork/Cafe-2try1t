@@ -398,8 +398,12 @@ body.home {
   padding: 4px 0;
   border-bottom: 2px solid transparent;
 }
-.navbar__menu > a:not(.btn):hover {
+/* Phase 4: hover state also grows the underline (the transition that makes it
+   glide is motion-guarded further down; the state itself snaps instantly under
+   reduced motion). The current-page link keeps its accent underline on hover. */
+.navbar__menu > a:not(.btn):not([aria-current="page"]):hover {
   color: var(--color-ink);
+  border-bottom-color: var(--color-tan);
 }
 .navbar__menu > a[aria-current="page"] {
   color: var(--color-ink);
@@ -712,12 +716,76 @@ body.home {
   color: var(--color-ink);
 }
 
-/* --- Motion: hover-only transitions, disabled when the user asks --- */
+/* ============================================================================
+   PREMIUM REDESIGN — Phase 4 (2026-08): motion pass
+
+   Hover feedback + a scroll-reveal fade-up on section blocks. Split in two:
+
+   1. STATE changes (below, outside any query) — hover tints on the menu rows
+      and featured cards. These apply instantly even under reduced motion; they
+      are colour, not movement.
+   2. MOTION (the @media block) — every transition/tween, the button lift, and
+      the scroll-reveal entrance. All gated on `prefers-reduced-motion:
+      no-preference`, so reduced-motion users get the end state with no
+      movement. The reveal's dimmed start state is ALSO gated on `.js-reveal`
+      (set by reveal.js) so a JS failure leaves every section visible.
+   ========================================================================= */
+
+/* Hover tints — subtle, colour-only, always on. rgba() of --color-tan (#C9B89A)
+   because the token layer has no translucent variant. */
+.page--menu .menu-item:hover {
+  background-color: rgba(201, 184, 154, 0.16);
+}
+.home .featured__card:hover {
+  background-color: rgba(201, 184, 154, 0.12);
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .btn,
   .navbar__menu > a:not(.btn),
   .page--about .about-line a {
     transition: background-color 0.18s ease, color 0.18s ease,
-      border-color 0.18s ease;
+      border-color 0.18s ease, transform 0.18s ease;
+  }
+  /* Pill buttons: a 1px lift on hover, released on press. */
+  .btn:hover {
+    transform: translateY(-1px);
+  }
+  .btn:active {
+    transform: translateY(0);
+  }
+
+  /* Menu rows tween their tint; featured cards tween the tint and lift 3px. */
+  .page--menu .menu-item {
+    transition: background-color 0.2s ease;
+  }
+  .home .featured__card {
+    transition: background-color 0.2s ease, transform 0.2s ease;
+  }
+  .home .featured__card:hover {
+    transform: translateY(-3px);
+  }
+
+  /* Scroll-reveal. Start state only exists when reveal.js has added
+     `.js-reveal`; reveal.js then adds `.is-revealed` per section as it
+     enters the viewport. Durations stay in the 150-400ms band. */
+  .js-reveal .featured,
+  .js-reveal .story,
+  .js-reveal .preview,
+  .js-reveal .visit,
+  .js-reveal .menu-list,
+  .js-reveal .about-grid {
+    opacity: 0;
+    transform: translateY(16px);
+    transition: opacity 0.4s ease, transform 0.4s ease;
+  }
+  .js-reveal .featured.is-revealed,
+  .js-reveal .story.is-revealed,
+  .js-reveal .preview.is-revealed,
+  .js-reveal .visit.is-revealed,
+  .js-reveal .menu-list.is-revealed,
+  .js-reveal .about-grid.is-revealed {
+    opacity: 1;
+    transform: none;
   }
 }
