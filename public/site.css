@@ -28,8 +28,9 @@ body.order-page .navbar {
    Home page (sharp corners, pill buttons only, straight ink section cuts, thin
    tan dividers, Fraunces display / Inter body). Both pages carry `body.page`
    for the shared shell and a `.page--menu` / `.page--about` modifier for the
-   page-specific bits. The Order page is untouched (its own `body.order-page`
-   + style.css), and is redesigned in a later phase.
+   page-specific bits. The Order page carries its own `body.order-page` rules
+   here plus style.css; its outer chrome + widget skin were moved onto the
+   tokens in Phase 3c-2.
 
    menu.js is unchanged: it still emits `.menu-category`, `.menu-item`,
    `.menu-item-name/-desc/-meta/-price` and the `.menu-loading` / `.menu-error`
