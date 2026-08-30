@@ -2,13 +2,6 @@
   box-sizing: border-box;
 }
 
-body.site {
-  margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  background: #f4ede4;
-  color: #2b1d12;
-}
-
 /* order.html reuses style.css, whose "body" rule sets display:flex (originally to
    center the single .app card). With the site-wide .navbar added as a second
    top-level child, that flex-row layout would put the nav and the widget side by
@@ -28,154 +21,200 @@ body.order-page .navbar {
   max-width: 900px;
 }
 
-.site-main {
+/* ============================================================================
+   PREMIUM REDESIGN — Phase 3c-1 (2026-08): Menu + About page bodies
+
+   Menu and About were rebuilt on the same token layer + visual language as the
+   Home page (sharp corners, pill buttons only, straight ink section cuts, thin
+   tan dividers, Fraunces display / Inter body). Both pages carry `body.page`
+   for the shared shell and a `.page--menu` / `.page--about` modifier for the
+   page-specific bits. The Order page is untouched (its own `body.order-page`
+   + style.css), and is redesigned in a later phase.
+
+   menu.js is unchanged: it still emits `.menu-category`, `.menu-item`,
+   `.menu-item-name/-desc/-meta/-price` and the `.menu-loading` / `.menu-error`
+   states into `#menu-content` — only their styling below changed.
+   ========================================================================= */
+
+/* --- Shared page shell (Menu + About) --- */
+body.page {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+}
+.page a {
+  color: inherit;
+}
+.page__main {
+  flex: 1;
+  width: 100%;
   max-width: 900px;
   margin: 0 auto;
-  padding: 32px 24px 48px;
+  padding: clamp(40px, 7vw, 72px) 24px clamp(56px, 9vw, 88px);
 }
 
-.site-card {
-  background: #fffaf3;
-  border: 1px solid #e5d8c5;
-  border-radius: 14px;
-  box-shadow: 0 4px 20px rgba(76, 52, 30, 0.1);
-  padding: 28px 32px;
+.page a:focus-visible,
+.page button:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 3px;
 }
 
-.site-hero h1 {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 2rem;
-  margin: 0 0 12px;
-  color: #2b1d12;
+/* --- Page header (light hero for interior pages) --- */
+.page-header {
+  border-bottom: 3px solid var(--color-ink);
+  padding-bottom: clamp(20px, 4vw, 32px);
+  margin-bottom: clamp(32px, 5vw, 48px);
 }
-
-.site-hero p {
-  color: #7a6650;
+.page-header__eyebrow {
+  margin: 0 0 14px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-accent-2);
+}
+.page-header__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(2rem, 5vw, 3rem);
+  line-height: 1.1;
+  color: var(--color-ink);
+}
+.page-header__lede {
+  margin: 16px 0 0;
+  max-width: 54ch;
   font-size: 1.05rem;
   line-height: 1.6;
-  margin: 0;
+  color: var(--color-ink-muted);
 }
 
-.cta-row {
-  display: flex;
-  gap: 12px;
-  margin-top: 20px;
-  flex-wrap: wrap;
+/* --- MENU list (styled to match Home's Featured cards: thin tan dividers,
+   sharp edges, Fraunces headings) --- */
+.page--menu .menu-category {
+  margin: 0 0 clamp(36px, 6vw, 56px);
 }
-
-.cta-button {
-  display: inline-block;
-  padding: 10px 20px;
-  background: #6f4e37;
-  color: #fff;
-  border-radius: 8px;
-  text-decoration: none;
-  font-size: 0.95rem;
-}
-
-.cta-button:hover {
-  background: #5a3e2b;
-}
-
-.cta-button.secondary {
-  background: transparent;
-  color: #6f4e37;
-  border: 1px solid #6f4e37;
-}
-
-.cta-button.secondary:hover {
-  background: #f0e6d8;
-}
-
-/* Menu page */
-.menu-category {
-  margin-bottom: 28px;
-}
-
-.menu-category:last-child {
+.page--menu .menu-category:last-child {
   margin-bottom: 0;
 }
-
-.menu-category h2 {
-  font-family: Georgia, "Times New Roman", serif;
-  color: #6f4e37;
-  font-size: 1.2rem;
-  margin: 0 0 12px;
-  border-bottom: 1px solid #e5d8c5;
-  padding-bottom: 6px;
+.page--menu .menu-category h2 {
+  margin: 0 0 4px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--color-ink);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(1.3rem, 3vw, 1.7rem);
+  color: var(--color-ink);
 }
-
-.menu-item {
+.page--menu .menu-item {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
-  padding: 10px 0;
-  border-bottom: 1px solid #f0e6d8;
+  align-items: baseline;
+  gap: 24px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--color-tan);
 }
-
-.menu-item:last-child {
-  border-bottom: none;
+.page--menu .menu-item:last-child {
+  border-bottom: 0;
 }
-
-.menu-item-name {
+.page--menu .menu-item > div:first-child {
+  min-width: 0;
+}
+.page--menu .menu-item-name {
   font-weight: 600;
-  color: #2b1d12;
+  font-size: 1rem;
+  color: var(--color-ink);
 }
-
-.menu-item-desc {
-  color: #7a6650;
-  font-size: 0.88rem;
-  margin-top: 2px;
+.page--menu .menu-item-desc {
+  margin-top: 5px;
+  max-width: 62ch;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--color-ink-muted);
 }
-
-.menu-item-meta {
-  color: #9b8367;
-  font-size: 0.8rem;
-  margin-top: 4px;
+.page--menu .menu-item-meta {
+  margin-top: 7px;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  color: var(--color-muted-2);
 }
-
-.menu-item-price {
-  font-weight: 700;
-  color: #6f4e37;
+.page--menu .menu-item-price {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--color-accent);
   white-space: nowrap;
 }
-
-.menu-loading,
-.menu-error {
-  color: #7a6650;
-  font-style: italic;
+.page--menu .menu-loading,
+.page--menu .menu-error {
   margin: 0;
+  font-style: italic;
+  color: var(--color-ink-muted);
+}
+.page--menu .menu-error {
+  color: var(--color-accent);
 }
 
-/* About page */
-.about-section {
-  margin-bottom: 24px;
+/* --- ABOUT — visit / hours / contact, styled like Home's Visit section --- */
+.page--about .about-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: clamp(24px, 5vw, 48px);
 }
-
-.about-section:last-child {
+.page--about .about-block__label {
+  margin: 0 0 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+}
+.page--about .about-line {
+  margin: 0 0 6px;
+  font-size: 1.02rem;
+  line-height: 1.6;
+  color: var(--color-ink-muted);
+}
+.page--about .about-line:last-child {
   margin-bottom: 0;
 }
-
-.about-section h2 {
-  font-family: Georgia, "Times New Roman", serif;
-  color: #6f4e37;
-  font-size: 1.15rem;
-  margin: 0 0 8px;
+.page--about .about-line--strong {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.page--about .about-line a {
+  color: var(--color-ink-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.page--about .about-line a:hover {
+  color: var(--color-ink);
 }
 
-.about-section p {
-  color: #2b1d12;
-  line-height: 1.6;
-  margin: 0 0 6px;
+@media (max-width: 760px) {
+  .page--about .about-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
-@media (max-width: 700px) {
-  .site-main {
-    padding: 20px 16px 32px;
-  }
-  .site-card {
-    padding: 20px;
-  }
+/* --- Shared interior-page footer (matches .home-footer) --- */
+.page-footer {
+  background: var(--color-tan-dark);
+  border-top: 3px solid var(--color-ink);
+}
+.page-footer p {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  color: var(--color-ink);
 }
 
 /* ============================================================================
@@ -213,8 +252,10 @@ body.home {
   color: inherit;
 }
 
-/* Skip link — visually hidden (zero layout footprint) until focused */
-.home .skip-link {
+/* Skip link — visually hidden (zero layout footprint) until focused.
+   Shared by the Home page and the interior `.page` pages (Menu, About). */
+.home .skip-link,
+.page .skip-link {
   position: absolute;
   top: 0;
   left: 0;
@@ -233,7 +274,8 @@ body.home {
   font-size: 0.85rem;
   text-decoration: none;
 }
-.home .skip-link:focus {
+.home .skip-link:focus,
+.page .skip-link:focus {
   width: auto;
   height: auto;
   margin: 0;
@@ -672,7 +714,8 @@ body.home {
 /* --- Motion: hover-only transitions, disabled when the user asks --- */
 @media (prefers-reduced-motion: no-preference) {
   .btn,
-  .navbar__menu > a:not(.btn) {
+  .navbar__menu > a:not(.btn),
+  .page--about .about-line a {
     transition: background-color 0.18s ease, color 0.18s ease,
       border-color 0.18s ease;
   }

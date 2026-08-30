@@ -10,7 +10,9 @@
   <link rel="stylesheet" href="tokens.css" />
   <link rel="stylesheet" href="site.css" />
 </head>
-<body class="site">
+<body class="page page--menu">
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="navbar">
     <div class="navbar__inner">
       <a class="navbar__brand" href="/">2try1t</a>
@@ -37,13 +39,24 @@
     </div>
   </header>
 
-  <main class="site-main">
-    <div class="site-card">
-      <div id="menu-content">
-        <p class="menu-loading">Loading menu…</p>
-      </div>
+  <main class="page__main" id="main">
+    <header class="page-header">
+      <p class="page-header__eyebrow">The Menu</p>
+      <h1 class="page-header__title">Everything we make</h1>
+      <p class="page-header__lede">
+        Coffee, tea, cold drinks, pastries, and sandwiches, all made fresh
+        through the day. Sizes and allergens are listed with each item.
+      </p>
+    </header>
+
+    <div class="menu-list" id="menu-content">
+      <p class="menu-loading">Loading menu…</p>
     </div>
   </main>
+
+  <footer class="page-footer">
+    <p>2try1t &middot; Winnipeg, MB &middot; © 2026</p>
+  </footer>
 
   <script src="nav.js"></script>
   <script src="menu.js"></script>
