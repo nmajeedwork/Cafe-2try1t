@@ -336,18 +336,26 @@ body.home {
   text-decoration: none;
   cursor: pointer;
 }
+/* Solid pill: a warm light-tan fill (not the old dark brown) with dark ink text.
+   The border is a step darker than the fill (--color-accent-2) so the light pill
+   still has a defined edge on the cream page. Hover goes DARKER, not lighter:
+   fill drops to --color-tan-dark and the edge deepens to --color-accent, so a
+   hover still reads as "something happened" from a lighter starting point. */
 .btn--solid {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  color: #fff;
+  background: var(--color-tan);
+  border-color: var(--color-accent-2);
+  color: var(--color-ink);
 }
 .btn--solid:hover {
-  background: var(--color-ink);
-  border-color: var(--color-ink);
+  background: var(--color-tan-dark);
+  border-color: var(--color-accent);
 }
+/* Outline pill: shares the solid pill's edge tone (--color-accent-2) so the
+   filled tan pill stays the clear primary rather than being out-weighed by a
+   heavier ink outline next to it. Hover still fills for a firm secondary cue. */
 .btn--outline {
   background: transparent;
-  border-color: var(--color-ink);
+  border-color: var(--color-accent-2);
   color: var(--color-ink);
 }
 .btn--outline:hover {
@@ -415,6 +423,33 @@ body.home {
 .navbar__menu .btn {
   padding: 10px 20px;
   font-size: 0.78rem;
+}
+
+/* Call link — lighter weight than the solid "Start an Order" pill so the two
+   don't compete: it reads like the other nav links (same size, underline on
+   hover, ~44px tap target) with a small accent phone glyph. */
+.navbar__call {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  white-space: nowrap;
+  color: var(--color-ink-muted);
+  padding: 12px 0;
+  border-bottom: 2px solid transparent;
+}
+.navbar__call:hover {
+  color: var(--color-ink);
+  border-bottom-color: var(--color-tan);
+}
+.navbar__call-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--color-accent);
 }
 
 /* Hamburger — hidden on desktop */
@@ -672,6 +707,38 @@ body.home {
   font-size: 0.82rem;
   font-style: italic;
   color: var(--color-muted-2);
+}
+
+/* --- PHONE ORDERING (sits right after the chat preview so both ordering
+   methods share one cream zone). Straight ink cut top and bottom (its own
+   border plus the Visit section's) keeps it distinct without a colour change. --- */
+.home .call-order {
+  background: var(--color-bg);
+  border-top: 3px solid var(--color-ink);
+}
+.home .call-order__wrap {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: clamp(56px, 9vw, 96px) 24px;
+}
+.home .call-order__text {
+  max-width: 52ch;
+  margin: 0 0 30px;
+  font-size: 1.05rem;
+  line-height: 1.65;
+  color: var(--color-ink-muted);
+}
+.home .call-order__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 32px;
+  font-size: 1.05rem;
+}
+.home .call-order__icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
 }
 
 /* --- VISIT / HOURS --- */
