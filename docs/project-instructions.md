@@ -70,6 +70,10 @@ Using Twilio Voice. Broken into sub-milestones:
 * Address validation/geocoding for delivery zones
 * Customer profiles / repeat customer history
 
+## Known issues / deferred
+
+* `validateOrderTiming` (server.js) checks whether a requested pickup time falls within operating hours, but does not check whether that time has already passed earlier today. A stale-but-in-hours time (e.g. asking for pickup at 6 PM when it is already 7:30 PM) passes the server guard, so handling falls to the model alone, and that is inconsistent turn to turn (sometimes it accepts and stores the past time, sometimes it flags it and asks for a new one). Low severity, deferred, revisit later. Surfaced during the Phase 6 regression pass.
+
 ## Lessons Learned (apply going forward)
 
 * Create milestone-scoped system prompt files proactively/upfront when planning a multi-stage build, not reactively after a mismatch is discovered — this already caused rework once (Milestones 3–5 prompts had to be created retroactively).
