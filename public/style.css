@@ -64,12 +64,15 @@ body {
   opacity: 0.85;
 }
 
+/* Same light-tan pill as site.css .btn--solid (colours + hover only). Sits on
+   the brown .app-header bar; pill shape, size and the white focus ring that
+   reads against that bar are unchanged. */
 .new-order-btn {
   flex-shrink: 0;
   padding: 8px 16px;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: var(--color-tan);
+  color: var(--color-ink);
+  border: 1px solid var(--color-accent-2);
   border-radius: 999px;
   font-family: var(--font-body);
   font-size: 0.85rem;
@@ -78,7 +81,8 @@ body {
 }
 
 .new-order-btn:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background: var(--color-tan-dark);
+  border-color: var(--color-accent);
 }
 
 .new-order-btn:focus-visible {
@@ -295,7 +299,9 @@ body {
 
 #message-input {
   flex: 1;
-  padding: 10px 12px;
+  /* Phase 5: 12px block padding (was 10px) so the field and Send button clear
+     ~44px tall. Kept identical on both so they stay the same height. */
+  padding: 12px 12px;
   border: 1px solid var(--color-ink);
   border-radius: 0;
   font-size: 1rem;
@@ -313,11 +319,14 @@ body {
   outline-offset: 2px;
 }
 
+/* Matches site.css .btn--solid: light tan fill, dark ink text, edge a step
+   darker than the fill, hover goes darker (not lighter). Pill shape, size and
+   focus ring are unchanged. */
 .chat-form button {
-  padding: 10px 22px;
-  background: var(--color-accent);
-  color: #fff;
-  border: 2px solid var(--color-accent);
+  padding: 12px 22px;
+  background: var(--color-tan);
+  color: var(--color-ink);
+  border: 2px solid var(--color-accent-2);
   border-radius: 999px;
   font-family: var(--font-body);
   font-size: 1rem;
@@ -331,8 +340,8 @@ body {
 }
 
 .chat-form button:hover:not(:disabled) {
-  background: var(--color-ink);
-  border-color: var(--color-ink);
+  background: var(--color-tan-dark);
+  border-color: var(--color-accent);
 }
 
 .chat-form button:focus-visible {
@@ -362,7 +371,11 @@ body {
 
 /* --- Responsive: stack cart above chat on smaller screens --- */
 
-@media (max-width: 700px) {
+/* Phase 5: 760px matches the navbar's hamburger breakpoint in site.css, so the
+   widget stacks to its mobile layout at the same width the nav collapses -
+   previously 700px, which left a 60px band (701-760) with a mobile hamburger
+   but the desktop side-by-side widget. */
+@media (max-width: 760px) {
   body {
     padding: 0;
     min-height: 100vh;
