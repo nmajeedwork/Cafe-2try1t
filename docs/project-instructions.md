@@ -73,6 +73,8 @@ Using Twilio Voice. Broken into sub-milestones:
 ## Known issues / deferred
 
 * `validateOrderTiming` (server.js) checks whether a requested pickup time falls within operating hours, but does not check whether that time has already passed earlier today. A stale-but-in-hours time (e.g. asking for pickup at 6 PM when it is already 7:30 PM) passes the server guard, so handling falls to the model alone, and that is inconsistent turn to turn (sometimes it accepts and stores the past time, sometimes it flags it and asks for a new one). Low severity, deferred, revisit later. Surfaced during the Phase 6 regression pass.
+* Voice: name-spelling confirmation is sometimes too aggressive, and degraded "Sarah" to "Sara" in testing. Surfaced during the Phase 6 regression pass's real Twilio call test.
+* Voice: farewell exit is clumsy when there are unconfirmed items in the cart at the time the call ends. Surfaced during the Phase 6 regression pass's real Twilio call test.
 
 ## Lessons Learned (apply going forward)
 
