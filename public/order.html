@@ -12,6 +12,8 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="order-page">
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="navbar">
     <div class="navbar__inner">
       <a class="navbar__brand" href="/">2try1t</a>
@@ -42,6 +44,9 @@
     </div>
   </header>
 
+  <!-- <main id="main"> wraps the widget so the shared skip-link has a target,
+       matching menu.html / about.html. Nothing inside .app is touched. -->
+  <main id="main">
   <div class="app">
     <header class="app-header">
       <div>
@@ -76,6 +81,7 @@
       </div>
     </div>
   </div>
+  </main>
 
   <script src="nav.js"></script>
   <script src="app.js"></script>

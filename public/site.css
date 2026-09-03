@@ -21,6 +21,30 @@ body.order-page .navbar {
   max-width: 900px;
 }
 
+/* order.html now wraps the widget in <main id="main"> (so the shared skip-link
+   has a target). The body's column-flex + centering used to act on .app
+   directly; mirror it onto <main> so the widget still fills the height and
+   centres exactly as before. Nothing inside .app changed. */
+body.order-page main {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Menu and About cap their content column at 900px (.page__main, below); match
+   the nav to that width so the header doesn't overhang the body on wide
+   viewports. Same reconciliation as body.order-page above, but body.page is a
+   plain flex column (no align-items: center), so the nav needs its own auto
+   margins to stay centred. */
+body.page .navbar {
+  width: 100%;
+  max-width: 900px;
+  margin-inline: auto;
+}
+
 /* ============================================================================
    PREMIUM REDESIGN — Phase 3c-1 (2026-08): Menu + About page bodies
 
@@ -254,9 +278,11 @@ body.home {
 }
 
 /* Skip link — visually hidden (zero layout footprint) until focused.
-   Shared by the Home page and the interior `.page` pages (Menu, About). */
+   Shared by the Home page, the interior `.page` pages (Menu, About), and the
+   Order page (`.order-page`). */
 .home .skip-link,
-.page .skip-link {
+.page .skip-link,
+.order-page .skip-link {
   position: absolute;
   top: 0;
   left: 0;
@@ -276,7 +302,8 @@ body.home {
   text-decoration: none;
 }
 .home .skip-link:focus,
-.page .skip-link:focus {
+.page .skip-link:focus,
+.order-page .skip-link:focus {
   width: auto;
   height: auto;
   margin: 0;
@@ -572,17 +599,25 @@ body.home {
 .home .featured__grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
+  /* Spacing between cards lives in the grid gap, not card padding. Padding on
+     the cards (with the old differential :first/:last overrides) made the
+     middle card's content box narrower, which shrank its 4:3 photo and pushed
+     its name out of line with the other two. Every card is now an equal 1fr. */
+  column-gap: 56px;
 }
+/* The thin divider is drawn in the gap (centred, 28px into the 56px gutter)
+   rather than as a card border, so it can't affect card width. */
 .home .featured__card {
-  padding: 0 28px;
-  border-right: 1px solid var(--color-tan);
+  position: relative;
 }
-.home .featured__card:first-child {
-  padding-left: 0;
-}
-.home .featured__card:last-child {
-  padding-right: 0;
-  border-right: 0;
+.home .featured__card:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -28px;
+  width: 1px;
+  background: var(--color-tan);
 }
 .home .featured__photo {
   aspect-ratio: 4 / 3;
@@ -618,12 +653,13 @@ body.home {
     grid-template-columns: 1fr;
   }
   .home .featured__card {
-    padding: 0 0 32px;
-    border-right: 0;
+    padding-bottom: 32px;
     border-bottom: 1px solid var(--color-tan);
   }
-  .home .featured__card:first-child {
-    padding-left: 0;
+  /* Stacked: the divider goes back to a bottom border between rows; the
+     gutter pseudo-element has no gap to sit in. */
+  .home .featured__card:not(:last-child)::after {
+    content: none;
   }
   .home .featured__card:last-child {
     padding-bottom: 0;
