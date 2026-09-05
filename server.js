@@ -3,6 +3,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 const Anthropic = require('@anthropic-ai/sdk');
 const twilio = require('twilio');
@@ -782,7 +783,13 @@ const app = express();
 // balancer in production) that terminates TLS and forwards over plain HTTP. Without this,
 // req.protocol reports "http" even for https requests, which breaks Twilio signature
 // validation below (the signature is computed against the https:// URL Twilio actually called).
-app.set('trust proxy', true);
+//
+// Set to 1, not true: trust exactly one proxy hop (the ngrok edge in dev, the single load
+// balancer in prod). "true" trusts the entire X-Forwarded-For chain, which lets any client
+// spoof req.ip by sending their own X-Forwarded-For header and defeat the per-IP rate
+// limiter below. With 1, req.ip is the real client address and req.protocol still resolves
+// from the one trusted hop's X-Forwarded-Proto, so Twilio validation is unaffected.
+app.set('trust proxy', 1);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded params
@@ -795,6 +802,56 @@ app.use(
   })
 );
 app.use(express.static(path.join(__dirname, 'public')));
+
+// --- Rate limiting (H1 hardening) -----------------------------------------------
+// Scoped deliberately to the two UNAUTHENTICATED endpoints that spend Anthropic
+// tokens on every call: POST /chat (browser widget) and POST /dev/voice-chat
+// (voice-prompt dev tester). Every other route is either static content
+// (GET /, /menu, /order, /about, /api/menu) or authenticated by Twilio's
+// signature check (/voice/*), so none of those are limited here.
+//
+// Two layers, applied per request in this order:
+//   1. per-IP    - caps a single client (default 20 / minute), shared across
+//                  both endpoints so one caller can't bypass it by alternating.
+//   2. global    - one shared bucket for ALL callers combined (default 100 /
+//                  minute), so a distributed flood from many IPs still can't
+//                  drive unbounded spend. Per-IP runs first so one abusive
+//                  client is cut off before it eats into the shared budget.
+//
+// Tunable without a code change via env vars (defaults in parens):
+//   RATE_LIMIT_WINDOW_MS  - sliding window, ms, for both layers (60000)
+//   RATE_LIMIT_MAX        - per-IP requests per window (20)
+//   RATE_LIMIT_GLOBAL_MAX - combined requests per window across all IPs (100)
+const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS) || 60 * 1000;
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 20;
+const RATE_LIMIT_GLOBAL_MAX = Number(process.env.RATE_LIMIT_GLOBAL_MAX) || 100;
+
+const TOO_MANY_REQUESTS_BODY = {
+  error: 'Too many requests, please slow down and try again shortly.'
+};
+
+const perIpLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  limit: RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json(TOO_MANY_REQUESTS_BODY)
+});
+
+const globalLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  limit: RATE_LIMIT_GLOBAL_MAX,
+  // One fixed key, so every request lands in the same bucket regardless of IP.
+  keyGenerator: () => 'global',
+  standardHeaders: false,
+  legacyHeaders: false,
+  // The fixed key is intentional; silence the "keyGenerator has no IP" check.
+  validate: { keyGeneratorIpFallback: false },
+  handler: (req, res) => res.status(429).json(TOO_MANY_REQUESTS_BODY)
+});
+
+// Spread onto each cost endpoint; per-IP before global (see note above).
+const costEndpointLimiters = [perIpLimiter, globalLimiter];
 
 // Clean-URL routes for the site's pages. express.static above already serves index.html
 // at "/" via its own default index resolution (no route needed for Home), and would also
@@ -820,7 +877,7 @@ app.get('/api/menu', (req, res) => {
   res.json(menu);
 });
 
-app.post('/chat', async (req, res) => {
+app.post('/chat', ...costEndpointLimiters, async (req, res) => {
   const userMessage = (req.body.message || '').trim();
   if (!userMessage) {
     return res.status(400).json({ error: 'Message is required.' });
@@ -1272,7 +1329,7 @@ app.post('/voice/continue', validateTwilioRequest, async (req, res) => {
 // Cart Updates rules) be tested with curl instead of a real phone call - /chat can't be
 // used for this since it always loads the browser prompt, not the voice one. Keeps its
 // own history under req.session.voiceTest so it never collides with a real /chat session.
-app.post('/dev/voice-chat', async (req, res) => {
+app.post('/dev/voice-chat', ...costEndpointLimiters, async (req, res) => {
   const userMessage = (req.body.message || '').trim();
   if (!userMessage) {
     return res.status(400).json({ error: 'Message is required.' });
