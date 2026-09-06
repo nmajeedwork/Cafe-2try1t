@@ -1,5 +1,32 @@
 require('dotenv').config();
 
+// --- H2 hardening: environment gating (Step 16 audit) -------------------------
+// The Step 16 audit found the dev-only affordances in this file had NO NODE_ENV
+// gating whatsoever: /dev/voice-chat answered in every environment, and the
+// DISABLE_HOURS_CHECK / FORCE_HOURS_CLOSED overrides silently took effect in
+// every environment. Both are now gated on NODE_ENV === 'development'. Anything
+// that is not explicitly "development" (unset, "production", a typo) is treated
+// as production-like and locked down - the default is the SAFE state, never the
+// permissive one.
+const IS_DEV = process.env.NODE_ENV === 'development';
+
+// The hours overrides are a local-testing convenience that switches OFF real
+// operating-hours enforcement (DISABLE_HOURS_CHECK) or forces every check to
+// report closed (FORCE_HOURS_CLOSED). If either is set anywhere but development,
+// refuse to start at all. The old behavior was a startup console.warn that let
+// the server run anyway, which could put a live cafe into taking orders 24/7 or
+// refusing every order. This check runs before express is even configured and
+// long before app.listen, so a misconfigured deploy serves zero requests.
+if (
+  (process.env.DISABLE_HOURS_CHECK === 'true' || process.env.FORCE_HOURS_CLOSED === 'true') &&
+  !IS_DEV
+) {
+  console.error(
+    'FATAL: DISABLE_HOURS_CHECK/FORCE_HOURS_CLOSED must not be set outside development. Refusing to start.'
+  );
+  process.exit(1);
+}
+
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -1329,25 +1356,33 @@ app.post('/voice/continue', validateTwilioRequest, async (req, res) => {
 // Cart Updates rules) be tested with curl instead of a real phone call - /chat can't be
 // used for this since it always loads the browser prompt, not the voice one. Keeps its
 // own history under req.session.voiceTest so it never collides with a real /chat session.
-app.post('/dev/voice-chat', ...costEndpointLimiters, async (req, res) => {
-  const userMessage = (req.body.message || '').trim();
-  if (!userMessage) {
-    return res.status(400).json({ error: 'Message is required.' });
-  }
+//
+// H2 hardening (Step 16 audit): this route previously had no NODE_ENV gating and
+// was reachable in every environment. It is now registered ONLY when
+// NODE_ENV === 'development'. Anywhere else the path is simply unknown to Express,
+// which returns its normal 404 - production never acknowledges the route exists,
+// and the H1 rate-limiter middleware isn't wired onto it there either.
+if (IS_DEV) {
+  app.post('/dev/voice-chat', ...costEndpointLimiters, async (req, res) => {
+    const userMessage = (req.body.message || '').trim();
+    if (!userMessage) {
+      return res.status(400).json({ error: 'Message is required.' });
+    }
 
-  if (!req.session.voiceTest) {
-    req.session.voiceTest = {};
-  }
-  initSessionState(req.session.voiceTest);
+    if (!req.session.voiceTest) {
+      req.session.voiceTest = {};
+    }
+    initSessionState(req.session.voiceTest);
 
-  try {
-    const result = await runCafeBotTurn(req.session.voiceTest, userMessage, STABLE_SYSTEM_TEXT_VOICE);
-    res.json(result);
-  } catch (err) {
-    console.error('Anthropic API error (voice dev test):', err);
-    res.status(500).json({ error: 'Something went wrong talking to CafeBot. Please try again.' });
-  }
-});
+    try {
+      const result = await runCafeBotTurn(req.session.voiceTest, userMessage, STABLE_SYSTEM_TEXT_VOICE);
+      res.json(result);
+    } catch (err) {
+      console.error('Anthropic API error (voice dev test):', err);
+      res.status(500).json({ error: 'Something went wrong talking to CafeBot. Please try again.' });
+    }
+  });
+}
 
 app.post('/reset', (req, res) => {
   req.session.destroy((err) => {
