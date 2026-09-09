@@ -16,7 +16,51 @@ for (const file of fs.readdirSync(DYNAMIC_DIR)) {
 }
 
 const MODEL_ID = process.env.ELEVENLABS_MODEL_ID || 'eleven_flash_v2_5';
-const DYNAMIC_FILE_TTL_MS = 5 * 60 * 1000;
+
+// H4 hardening: per-call TTS files can contain caller PII (name, address, order
+// details), so their URLs are HMAC-signed with a short expiry (see
+// getDynamicAudioUrl / verifyDynamicToken). Twilio fetches <Play> media within a
+// few seconds, so 120s is generous. DYNAMIC_FILE_TTL_MS (the on-disk lifetime, was
+// 5 minutes) is dropped to match: once the signed URL is dead there's no legitimate
+// reason for the file to still exist, and a leaked URL then fails twice over
+// (expired signature AND missing file). The startup sweep and the per-file
+// setTimeout below are unchanged apart from this shorter constant.
+const DYNAMIC_URL_TTL_MS = 2 * 60 * 1000;
+const DYNAMIC_FILE_TTL_MS = 2 * 60 * 1000;
+
+// Same fallback as server.js's session secret, so both sides of the HMAC agree even
+// when SESSION_SECRET is unset in local dev. Outside development server.js refuses to
+// start without a real SESSION_SECRET (H3), so this fallback is dev-only in practice.
+const AUDIO_SIGNING_SECRET = process.env.SESSION_SECRET || 'dev-secret';
+
+// HMAC over "<filename>:<expiresAt>" - binds the token to one specific file and one
+// expiry instant, so it can't be moved to another file or extended.
+function signDynamicToken(filename, expiresAt) {
+  return crypto
+    .createHmac('sha256', AUDIO_SIGNING_SECRET)
+    .update(`${filename}:${expiresAt}`)
+    .digest('hex');
+}
+
+// True only for a well-formed, correctly-signed, not-yet-expired token. Every
+// malformed or failing case returns false the same way - the caller (the guarded
+// /audio/dynamic route in server.js) turns any false into an identical generic 404,
+// so a probe can't distinguish "bad signature" from "expired" from "no such file".
+function verifyDynamicToken(filename, exp, sig) {
+  if (!filename || !exp || !sig) {
+    return false;
+  }
+  const expiresAt = Number(exp);
+  if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+    return false;
+  }
+  const expected = signDynamicToken(filename, expiresAt);
+  const given = String(sig);
+  if (given.length !== expected.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+}
 
 // Lower-bitrate MP3 than ElevenLabs' default (mp3_44100_128) - smaller file means both
 // faster generation and a faster fetch when Twilio retrieves it for <Play>. Phone audio
@@ -75,8 +119,10 @@ async function getCachedAudioUrl(text, req) {
 }
 
 // CafeBot's actual reply is different every turn, so it's always generated fresh and
-// never cached. The file is deleted a few minutes later, well after Twilio has fetched
-// it for <Play> - unref() so the timer can't keep the process alive or block --watch restarts.
+// never cached. The file is deleted a couple of minutes later, well after Twilio has
+// fetched it for <Play> - unref() so the timer can't keep the process alive or block
+// --watch restarts. The returned URL carries an HMAC-signed, ~120s expiry token that
+// the guarded /audio/dynamic route in server.js checks before serving (H4 hardening).
 async function getDynamicAudioUrl(text, req, callSid) {
   const safeCallSid = String(callSid).replace(/[^a-zA-Z0-9_-]/g, '');
   const filename = `${safeCallSid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.mp3`;
@@ -89,7 +135,9 @@ async function getDynamicAudioUrl(text, req, callSid) {
     fs.unlink(filePath, () => {});
   }, DYNAMIC_FILE_TTL_MS).unref();
 
-  return buildUrl(req, `audio/dynamic/${filename}`);
+  const expiresAt = Date.now() + DYNAMIC_URL_TTL_MS;
+  const sig = signDynamicToken(filename, expiresAt);
+  return buildUrl(req, `audio/dynamic/${filename}?exp=${expiresAt}&sig=${sig}`);
 }
 
 // Speaks `text` into `container` (a Twilio VoiceResponse or a <Gather> node - both
@@ -107,4 +155,4 @@ async function speak(container, text, { req, cache = false, callSid } = {}) {
   }
 }
 
-module.exports = { speak };
+module.exports = { speak, signDynamicToken, verifyDynamicToken, DYNAMIC_DIR };
