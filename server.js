@@ -27,6 +27,23 @@ if (
   process.exit(1);
 }
 
+// --- H3 hardening: session cookie / secret (follow-up to the original security audit) ---
+// The original audit flagged that express-session was configured with a hardcoded
+// fallback secret ('dev-secret') that would silently be used in production if
+// SESSION_SECRET was never set - meaning session cookies could be forged by anyone
+// who read this source. The fallback is fine for local dev, but anywhere else an
+// unset or copy-pasted-from-dev secret must be a hard startup failure, not a silent
+// default. Gated on !IS_DEV (same safe-by-default pattern as the H2 hours guard):
+// anything that isn't explicitly NODE_ENV=development - unset, "production", a typo -
+// is treated as production-like and must have a real secret. Refuses to start before
+// app.listen, so a misconfigured deploy serves zero requests.
+if (!IS_DEV && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET === 'dev-secret')) {
+  console.error(
+    'FATAL: SESSION_SECRET must be set to a real secret outside development (not unset, not "dev-secret"). Refusing to start.'
+  );
+  process.exit(1);
+}
+
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -824,8 +841,20 @@ app.use(
   session({
     secret: process.env.SESSION_SECRET || 'dev-secret',
     resave: false,
-    saveUninitialized: true,
-    cookie: { httpOnly: true }
+    // H3 hardening (security audit follow-up): only issue a session cookie once
+    // something has actually been written to req.session (first cart action or chat
+    // message). Someone who only browses Home/Menu/About never gets a cookie.
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      // secure requires HTTPS, which plain localhost dev doesn't have; drop it only
+      // for explicit NODE_ENV=development. Anywhere else (unset, production, a typo)
+      // is assumed to sit behind TLS terminated at the proxy in front of this app.
+      secure: !IS_DEV,
+      // Same-origin app (widget + site on one domain); Twilio webhooks are
+      // signature-authenticated, not cookie-based. 'lax' is the correct default.
+      sameSite: 'lax'
+    }
   })
 );
 app.use(express.static(path.join(__dirname, 'public')));
