@@ -52,7 +52,7 @@ const session = require('express-session');
 const Anthropic = require('@anthropic-ai/sdk');
 const twilio = require('twilio');
 const VoiceResponse = twilio.twiml.VoiceResponse;
-const { speak } = require('./elevenlabs-tts');
+const { speak, verifyDynamicToken, DYNAMIC_DIR } = require('./elevenlabs-tts');
 const { saveInProgressOrder, clearInProgressOrder, findResumableOrder } = require('./voice-order-recovery');
 
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
@@ -857,6 +857,42 @@ app.use(
     }
   })
 );
+// --- H4 hardening: signed, expiring URLs for per-call TTS audio ------------------
+// public/audio/dynamic/ holds CafeBot's freshly generated spoken replies, which can
+// contain caller PII (name, delivery address, order details). They used to be served
+// by the blanket express.static mount below - a plain unauthenticated GET that stayed
+// fetchable for the file's whole lifetime by anyone who obtained the URL (Twilio
+// debugger logs, the ngrok request inspector, a packet capture).
+//
+// This route shadows that one subtree (it is registered BEFORE express.static and
+// never calls next(), so static never sees these paths). Every dynamic URL now
+// carries an HMAC(filename:exp) token minted in getDynamicAudioUrl; this handler
+// recomputes it and checks the expiry before streaming the file. Every failure mode
+// - expired, bad signature, missing params, unknown/mis-shaped filename, file gone -
+// returns the exact same generic 404, so a probe cannot tell "wrong signature" from
+// "expired" from "no such file", i.e. it cannot learn whether a URL was ever valid.
+//
+// public/audio/cache/ is deliberately NOT touched: those are generic, reusable
+// phrases (greeting, farewells, filler) with no caller data, and are still served
+// unsigned by express.static exactly as before.
+app.get('/audio/dynamic/:filename', (req, res) => {
+  const notFound = () => res.status(404).type('text/plain').send('Not found');
+
+  const filename = path.basename(String(req.params.filename || ''));
+  if (!/^[A-Za-z0-9_-]+\.mp3$/.test(filename)) {
+    return notFound();
+  }
+  if (!verifyDynamicToken(filename, req.query.exp, req.query.sig)) {
+    return notFound();
+  }
+
+  return res.sendFile(path.join(DYNAMIC_DIR, filename), (err) => {
+    if (err && !res.headersSent) {
+      notFound();
+    }
+  });
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Rate limiting (H1 hardening) -----------------------------------------------
