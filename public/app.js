@@ -23,6 +23,32 @@ function showTyping() {
   return el;
 }
 
+// Render's free tier spins down an idle instance, so the first /chat request
+// after inactivity can take 30-50+ seconds instead of the usual second or
+// two. If a reply hasn't come back by WAKE_MESSAGE_DELAY_MS, swap the plain
+// typing dots for an on-brand message so the interface doesn't look frozen.
+const WAKE_MESSAGE_DELAY_MS = 3000;
+const WAKE_MESSAGE_TEXT = 'Waking up the kitchen... this can take a moment.';
+
+function showWaking() {
+  const el = document.createElement('div');
+  el.className = 'waking-indicator';
+
+  const icon = document.createElement('span');
+  icon.className = 'waking-icon';
+  icon.textContent = '☕';
+  icon.setAttribute('aria-hidden', 'true');
+
+  const text = document.createElement('span');
+  text.textContent = WAKE_MESSAGE_TEXT;
+
+  el.appendChild(icon);
+  el.appendChild(text);
+  messagesEl.appendChild(el);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return el;
+}
+
 function addTotalRow(label, amount, modifierClass) {
   const row = document.createElement('div');
   row.className = modifierClass ? `cart-total-row ${modifierClass}` : 'cart-total-row';
@@ -111,6 +137,10 @@ formEl.addEventListener('submit', async (e) => {
   formEl.querySelector('button').disabled = true;
 
   const typingEl = showTyping();
+  let wakingEl = null;
+  const wakeTimer = setTimeout(() => {
+    wakingEl = showWaking();
+  }, WAKE_MESSAGE_DELAY_MS);
 
   try {
     const res = await fetch('/chat', {
@@ -122,7 +152,9 @@ formEl.addEventListener('submit', async (e) => {
 
     const data = await res.json();
 
+    clearTimeout(wakeTimer);
     typingEl.remove();
+    if (wakingEl) wakingEl.remove();
 
     if (!res.ok) {
       addMessage(data.error || 'Something went wrong.', 'error');
@@ -131,7 +163,9 @@ formEl.addEventListener('submit', async (e) => {
       renderCart(data.cart, data.promotions);
     }
   } catch (err) {
+    clearTimeout(wakeTimer);
     typingEl.remove();
+    if (wakingEl) wakingEl.remove();
     addMessage('Could not reach the server. Please try again.', 'error');
   } finally {
     inputEl.disabled = false;
