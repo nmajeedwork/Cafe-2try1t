@@ -64,11 +64,22 @@ Using Twilio Voice. Broken into sub-milestones:
 ## Future/deferred (not yet scoped)
 
 * WhatsApp integration
-* Inventory/stock checking (flagged as wanted, not yet planned in detail)
 * POS system integration
 * In-chat payment collection
 * Address validation/geocoding for delivery zones
 * Customer profiles / repeat customer history
+
+## Inventory/Stock Management Dashboard (deferred, not yet scoped in detail)
+
+Goal: replace the static menu.json with live inventory tracking, and give Nmajeed a web dashboard to add/edit items and mark things out of stock, with CafeBot responding based on real-time availability instead of a fixed list.
+
+Known scope, roughly comparable in size to the visual redesign effort:
+* Requires a real database (menu.json's flat-file model doesn't support live read/write updates)
+* Requires authentication for the dashboard. An unauthenticated admin panel would undo the H1-H4 hardening work
+* Requires new/updated agent tools so CafeBot checks and decrements stock, not just reads a static list
+* Requires a dashboard UI to be designed and built
+
+Not started. Treat as its own project phase (plan, approve, implement, same working convention as everything else) once picked up. Don't fold into an existing milestone.
 
 ## Known issues / deferred
 
