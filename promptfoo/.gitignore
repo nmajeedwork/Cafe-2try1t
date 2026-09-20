@@ -1,0 +1,8 @@
+# Scan output — commit the config (redteam-config.yaml), not results.
+# These files contain generated attack prompts and CafeBot's actual
+# transcripts from each run, which aren't meant to be permanent repo
+# content.
+results/
+*.json
+*.log
+.promptfoo-cache/
