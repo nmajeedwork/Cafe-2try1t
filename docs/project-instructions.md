@@ -51,15 +51,21 @@ Nmajeed is building an AI ordering agent ("CafeBot") for a café called 2try1t, 
 * `system-prompt-milestone2.md` through `system-prompt-milestone5.md` — scoped prompts used during incremental development
 * `system-prompt.md` — the full, unified prompt (all tools exist) — in use since Milestone 6
 
-## Next phase — Phone/Voice Support (in progress)
+### Phone/Voice Support (COMPLETE)
 
 Using Twilio Voice. Broken into sub-milestones:
 
-1. Basic call connectivity (answer call, static greeting, no AI yet)
-2. STT/TTS pipeline (speech-to-text and text-to-speech, still no CafeBot logic)
-3. Connect to existing CafeBot logic (route transcribed text through existing /chat tool-use flow)
-4. Voice-specific prompt tuning (shorter responses, no long lists read aloud, explicit confirmations since there's no visual cart)
-5. Testing pass (real calls, mishearing, silence, background noise)
+1. ✅ Basic call connectivity (answer call, static greeting, no AI yet)
+2. ✅ STT/TTS pipeline (speech-to-text and text-to-speech, still no CafeBot logic)
+3. ✅ Connect to existing CafeBot logic (route transcribed text through existing /chat tool-use flow)
+4. ✅ Voice-specific prompt tuning (shorter responses, no long lists read aloud, explicit confirmations since there's no visual cart)
+5. ✅ Testing pass (real calls, mishearing, silence, background noise)
+
+### Deployment (COMPLETE)
+
+CafeBot is live at https://cafe-2try1t.onrender.com/. Both browser chat and voice ordering have been verified working end-to-end on the actual production deployment, not just local testing, including a complete real phone order that produced a valid order ID.
+
+The visual redesign, all four security hardening passes (H1-H4), and deployment are all complete. See [redesign-report.md](redesign-report.md) and [hardening-report.md](hardening-report.md) for details.
 
 ## Future/deferred (not yet scoped)
 
