@@ -94,6 +94,10 @@ Not started. Treat as its own project phase (plan, approve, implement, same work
 * Voice: farewell exit is clumsy when there are unconfirmed items in the cart at the time the call ends. Surfaced during the Phase 6 regression pass's real Twilio call test.
 * Voice: a combined cancel-and-goodbye utterance in one sentence (e.g. "I don't want anything and bye") wasn't understood on first attempt during a live call while the agent was mid-flow asking for pickup name. It did not recognize this as an exit signal immediately. The call did eventually end correctly after a follow-up exchange. Distinct from the farewell-exit note above, which is about cart state at call end. This is about a specific phrasing combination.
 
+### Resolved
+
+* RESOLVED — Timezone bug: server.js used raw server clock time (Render runs UTC) as if it were the café's local time (Winnipeg, America/Winnipeg), with no timezone conversion anywhere in the codebase. This caused incorrect open/closed determinations and fed the wrong current day/time into every chat and voice interaction since deployment. Never caught in local testing because the local dev machine's clock happened to already be in Winnipeg time. Found via a real phone call from a friend at 9 PM Winnipeg time that was incorrectly told the café was closed. Fixed by adding a getCafeNow() helper using Intl.DateTimeFormat with the America/Winnipeg timezone, replacing every raw new Date() call site used for café-local time. Added test/hours.test.js (14 tests) as permanent regression coverage. Verified fixed via a live phone call after deployment.
+
 ## Lessons Learned (apply going forward)
 
 * Create milestone-scoped system prompt files proactively/upfront when planning a multi-stage build, not reactively after a mismatch is discovered — this already caused rework once (Milestones 3–5 prompts had to be created retroactively).
