@@ -72,6 +72,10 @@ const CAFE_HOURS = {
   weekday: { open: '05:00', close: '02:00' }, // Mon–Fri
   weekend: { open: '05:00', close: '02:00' } // Sat–Sun
 };
+// The café's real-world location. All "what time is it right now, for hours purposes"
+// logic must go through getCafeNow() below instead of a raw server clock - see there for
+// why (Render runs the process in UTC, which is not this).
+const CAFE_TIMEZONE = 'America/Winnipeg';
 // New pickup/delivery orders stop being accepted this many minutes before close.
 const CLOSING_BUFFER_MINUTES = 30;
 
@@ -322,9 +326,50 @@ function updateCustomization(cart, input) {
   return { success: true, updated: item, cart: cartSummary(cart), promotions: checkPromotions(cart) };
 }
 
-function getHoursForDay(date) {
-  const day = date.getDay(); // 0 = Sunday ... 6 = Saturday
-  return day === 0 || day === 6 ? CAFE_HOURS.weekend : CAFE_HOURS.weekday;
+function getHoursForDay(dayOfWeek) {
+  return dayOfWeek === 0 || dayOfWeek === 6 ? CAFE_HOURS.weekend : CAFE_HOURS.weekday;
+}
+
+// Formats an instant into its Winnipeg wall-clock date/time parts. Built once at module
+// load (Intl.DateTimeFormat construction isn't free) and reused on every call.
+const cafeTimePartsFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: CAFE_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: 'numeric',
+  minute: 'numeric',
+  hourCycle: 'h23'
+});
+
+// The single source of truth for "what time is it at the café right now". Render (and
+// most hosts) run the Node process's clock in UTC - a raw `new Date().getHours()` reads
+// the SERVER's timezone, not Winnipeg's, and was silently wrong by 5-6 hours (CDT/CST)
+// depending on daylight saving. Intl.DateTimeFormat with an IANA zone name looks up the
+// real local time for that zone, including DST transitions, straight from the
+// platform's tz database - no manual UTC-offset math, and nothing to update twice a year.
+//
+// Returns dayOfWeek (0 = Sunday ... 6 = Saturday, same convention as Date.getDay()),
+// hour (0-23), and minute (0-59), all already in café-local time.
+//
+// `instant` defaults to the real current time; every production call site uses that
+// default. It's an accepted parameter (rather than hardcoding `new Date()` below) purely
+// so tests can pass a specific, known instant and assert on the Winnipeg-local result,
+// without having to mock the global Date or Intl.
+function getCafeNow(instant = new Date()) {
+  const parts = Object.fromEntries(
+    cafeTimePartsFormatter.formatToParts(instant).map((part) => [part.type, part.value])
+  );
+  // Day-of-week for a calendar date is timezone-independent once you know the Y/M/D
+  // (e.g. "2026-09-22" is a Tuesday everywhere) - anchoring at UTC midnight for that
+  // date is just a reliable way to ask the platform for it, with no locale/ICU string
+  // parsing involved.
+  const dayOfWeek = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day))).getUTCDay();
+  return {
+    dayOfWeek,
+    hour: Number(parts.hour) % 24, // defensive: some ICU builds emit "24" for midnight even under h23
+    minute: Number(parts.minute)
+  };
 }
 
 function timeStringToMinutes(timeStr) {
@@ -340,18 +385,17 @@ function formatClock(minutes) {
   return `${h}:${String(m).padStart(2, '0')} ${meridiem}`;
 }
 
-function getNextOpeningLabel(now) {
-  const todayHours = getHoursForDay(now);
+function getNextOpeningLabel(cafeNow) {
+  const todayHours = getHoursForDay(cafeNow.dayOfWeek);
   const openMin = timeStringToMinutes(todayHours.open);
-  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const nowMin = cafeNow.hour * 60 + cafeNow.minute;
 
   if (nowMin < openMin) {
     return `${formatClock(openMin)} today`;
   }
 
-  const tomorrow = new Date(now);
-  tomorrow.setDate(now.getDate() + 1);
-  const tomorrowHours = getHoursForDay(tomorrow);
+  const tomorrowDayOfWeek = (cafeNow.dayOfWeek + 1) % 7;
+  const tomorrowHours = getHoursForDay(tomorrowDayOfWeek);
   return `${formatClock(timeStringToMinutes(tomorrowHours.open))} tomorrow`;
 }
 
@@ -381,8 +425,8 @@ function parseClockTime(timeStr) {
 // open/close window is a normal increasing range instead of close < open. Any raw
 // minute-of-day being compared against this window must go through normalizeAgainstOpen
 // below so it lands on the same extended scale.
-function getHoursWindow(now) {
-  const hours = getHoursForDay(now);
+function getHoursWindow(cafeNow) {
+  const hours = getHoursForDay(cafeNow.dayOfWeek);
   const openMin = timeStringToMinutes(hours.open);
   let closeMin = timeStringToMinutes(hours.close);
   if (closeMin <= openMin) {
@@ -399,7 +443,9 @@ function normalizeAgainstOpen(rawMin, openMin) {
   return rawMin < openMin ? rawMin + 24 * 60 : rawMin;
 }
 
-function validateOrderTiming(orderType, pickupTimeStr) {
+// `instant` defaults to the real current time, same rationale as getCafeNow() above —
+// every production call site (setOrderType) omits it and gets the real "now".
+function validateOrderTiming(orderType, pickupTimeStr, instant = new Date()) {
   // Dev-only override for testing outside real café hours — never set in committed
   // config, .env is gitignored. Remove this env var to restore normal hours enforcement.
   if (process.env.DISABLE_HOURS_CHECK === 'true') {
@@ -411,17 +457,17 @@ function validateOrderTiming(orderType, pickupTimeStr) {
   // pickup-time-specific one) be retested on demand instead of only during the real
   // closed window. Never set in committed config, .env is gitignored.
   if (process.env.FORCE_HOURS_CLOSED === 'true') {
-    return { error: `Sorry, we're closed right now (testing override) — we'd normally open at ${getNextOpeningLabel(new Date())}.` };
+    return { error: `Sorry, we're closed right now (testing override) — we'd normally open at ${getNextOpeningLabel(getCafeNow(instant))}.` };
   }
 
-  const now = new Date();
+  const now = getCafeNow(instant);
   const { openMin, closeMin } = getHoursWindow(now);
   const cutoffMin = closeMin - CLOSING_BUFFER_MINUTES;
 
   // Delivery, or pickup with no specific time yet: validate against the current moment.
   // New orders stop being accepted once we're within the closing buffer.
   if (orderType === 'delivery' || !pickupTimeStr) {
-    const rawNowMin = now.getHours() * 60 + now.getMinutes();
+    const rawNowMin = now.hour * 60 + now.minute;
     const nowMin = normalizeAgainstOpen(rawNowMin, openMin);
     if (nowMin < openMin || nowMin >= cutoffMin) {
       const closedFor = orderType === 'delivery'
@@ -437,7 +483,7 @@ function validateOrderTiming(orderType, pickupTimeStr) {
   if (parsed === null) {
     return { error: `I couldn't understand the pickup time "${pickupTimeStr}". Could you give a time like "6:15 PM"?` };
   }
-  const rawTargetMin = parsed === 'now' ? now.getHours() * 60 + now.getMinutes() : parsed;
+  const rawTargetMin = parsed === 'now' ? now.hour * 60 + now.minute : parsed;
   const targetMin = normalizeAgainstOpen(rawTargetMin, openMin);
   // The cutoff itself is still an acceptable pickup slot — it's the LAST acceptable time.
   if (targetMin < openMin || targetMin > cutoffMin) {
@@ -571,9 +617,11 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 const STABLE_SYSTEM_TEXT = `${basePrompt}\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
 const STABLE_SYSTEM_TEXT_VOICE = `${voiceBasePrompt}\n\n## Today's Menu (JSON)\n${JSON.stringify(menu, null, 2)}`;
 
-function buildSystemBlocks(stableText, { resumedOrder = false } = {}) {
-  const now = new Date();
-  const nowLabel = `${DAY_NAMES[now.getDay()]}, ${formatClock(now.getHours() * 60 + now.getMinutes())}`;
+// `instant` defaults to the real current time, same rationale as getCafeNow() above —
+// the production call site (runCafeBotTurn) omits it and gets the real "now".
+function buildSystemBlocks(stableText, { resumedOrder = false } = {}, instant = new Date()) {
+  const now = getCafeNow(instant);
+  const nowLabel = `${DAY_NAMES[now.dayOfWeek]}, ${formatClock(now.hour * 60 + now.minute)}`;
 
   let timeText = `## Current Date & Time\nIt is currently **${nowLabel}**. This is the ground truth for "now" — use it to resolve relative times (e.g. "in 20 minutes", "this afternoon"). Never guess or claim you don't know the time.`;
 
@@ -1461,6 +1509,15 @@ app.post('/reset', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`2try1t CafeBot listening on http://localhost:${PORT}`);
-});
+// Guarded so this file can be `require`d (see test/hours.test.js) without opening a
+// port — only true when server.js is the process entry point (`node server.js`),
+// exactly how it's already started in dev and in production.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`2try1t CafeBot listening on http://localhost:${PORT}`);
+  });
+}
+
+// Exported for the hours/timezone unit tests only — nothing about how the app runs
+// depends on this export existing.
+module.exports = { getCafeNow, validateOrderTiming, buildSystemBlocks };
