@@ -541,12 +541,9 @@ body.home {
   inset: 0;
 }
 .home .hero__photo {
-  /* Striped stand-in for a real stock photo (warm tan). */
-  background: repeating-linear-gradient(
-    135deg,
-    #cabb9c 0 44px,
-    #d5c7ab 44px 88px
-  );
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .home .hero__overlay {
   /* The one functional gradient: keeps dark hero text readable over a busy photo. */
@@ -622,6 +619,10 @@ body.home {
 .home .featured__photo {
   aspect-ratio: 4 / 3;
   margin-bottom: 18px;
+  display: block;
+  width: 100%;
+  object-fit: cover;
+  /* Striped stand-in, still used by any featured item without a real photo yet. */
   background: repeating-linear-gradient(
     135deg,
     #cabb9c 0 22px,
@@ -683,11 +684,9 @@ body.home {
 }
 .home .story__photo {
   aspect-ratio: 3 / 2;
-  background: repeating-linear-gradient(
-    135deg,
-    #bdad8d 0 30px,
-    #c6b797 30px 60px
-  );
+  display: block;
+  width: 100%;
+  object-fit: cover;
 }
 .home .story__text {
   font-size: 1.05rem;
