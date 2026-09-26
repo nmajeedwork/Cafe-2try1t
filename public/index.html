@@ -54,7 +54,7 @@
   <main id="main">
     <!-- HERO -->
     <section class="hero">
-      <div class="hero__photo" role="img" aria-label="Placeholder for a café photograph"></div>
+      <img class="hero__photo" src="/images/hero.webp" alt="" loading="eager">
       <div class="hero__overlay" aria-hidden="true"></div>
       <div class="hero__content">
         <div class="hero__frame">
@@ -84,7 +84,7 @@
     <!-- BRAND STORY -->
     <section class="story">
       <div class="story__grid">
-        <div class="story__photo" role="img" aria-label="Placeholder for an interior photograph of the café"></div>
+        <img class="story__photo" src="/images/brand-story.webp" alt="" loading="lazy">
         <div class="story__body">
           <p class="section-tag">Our Story</p>
           <h2 class="section-heading">A neighbourhood café</h2>
@@ -177,6 +177,13 @@
           // Featured items are picked by exact name; data (price, description,
           // etc.) still comes live from /api/menu.
           var FEATURED_NAMES = ['Iced Matcha Latte', 'Blueberry Muffin', 'Avocado Toast'];
+          // Real photos for the featured items that have one yet — anything not
+          // listed here still gets the striped placeholder box.
+          var FEATURED_PHOTOS = {
+            'Iced Matcha Latte': '/images/iced-matcha-latte.webp',
+            'Blueberry Muffin': '/images/blueberry-muffin.webp',
+            'Avocado Toast': '/images/avocado-toast.webp'
+          };
           var featured = FEATURED_NAMES
             .map(function (wanted) {
               var match = items.find(function (item) { return item.name === wanted; });
@@ -194,10 +201,17 @@
             var card = document.createElement('article');
             card.className = 'featured__card';
 
-            var photo = document.createElement('div');
+            var photoSrc = FEATURED_PHOTOS[item.name];
+            var photo = document.createElement(photoSrc ? 'img' : 'div');
             photo.className = 'featured__photo';
-            photo.setAttribute('role', 'img');
-            photo.setAttribute('aria-label', 'Placeholder photo of ' + item.name);
+            if (photoSrc) {
+              photo.src = photoSrc;
+              photo.alt = item.name;
+              photo.loading = 'lazy';
+            } else {
+              photo.setAttribute('role', 'img');
+              photo.setAttribute('aria-label', 'Placeholder photo of ' + item.name);
+            }
 
             var name = document.createElement('h3');
             name.className = 'featured__name';
