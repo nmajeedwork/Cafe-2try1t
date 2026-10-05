@@ -4,6 +4,28 @@ function formatPrice(price) {
   return `$${price.toFixed(2)}`;
 }
 
+// Stable per-item anchor id, e.g. "Iced Matcha Latte" -> "item-iced-matcha-latte".
+// Home's featured cards (index.html) build their /menu#item-... links with an
+// identical function, so the two must stay in sync.
+function itemAnchorId(name) {
+  const slug = name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `item-${slug}`;
+}
+
+// The browser tries to jump to the URL's #hash on load, before the items exist,
+// so redo that jump once rendering is done.
+function scrollToHashTarget() {
+  const id = decodeURIComponent(window.location.hash.slice(1));
+  if (!id) return;
+  const target = document.getElementById(id);
+  if (target) target.scrollIntoView({ block: 'start' });
+}
+
 function renderMenu(items) {
   menuContentEl.innerHTML = '';
 
@@ -28,6 +50,7 @@ function renderMenu(items) {
     for (const item of byCategory[category]) {
       const row = document.createElement('div');
       row.className = 'menu-item';
+      row.id = itemAnchorId(item.name);
 
       const info = document.createElement('div');
 
@@ -67,6 +90,8 @@ function renderMenu(items) {
 
     menuContentEl.appendChild(section);
   }
+
+  scrollToHashTarget();
 }
 
 fetch('/api/menu')
