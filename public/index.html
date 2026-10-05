@@ -196,17 +196,32 @@
           if (featured.length === 0) {
             throw new Error('No featured items matched');
           }
+          // Must match itemAnchorId() in menu.js, which sets these ids on the
+          // Menu page's rows. Built from the live item name, not hardcoded.
+          function itemAnchorId(name) {
+            var slug = name
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '-')
+              .replace(/^-+|-+$/g, '');
+            return 'item-' + slug;
+          }
           grid.innerHTML = '';
           featured.forEach(function (item) {
-            var card = document.createElement('article');
+            // The whole card is one real link to this item on the Menu page.
+            var card = document.createElement('a');
             card.className = 'featured__card';
+            card.href = '/menu#' + itemAnchorId(item.name);
 
             var photoSrc = FEATURED_PHOTOS[item.name];
             var photo = document.createElement(photoSrc ? 'img' : 'div');
             photo.className = 'featured__photo';
             if (photoSrc) {
               photo.src = photoSrc;
-              photo.alt = item.name;
+              // Decorative inside the link: the card's heading already names
+              // the item, so a matching alt would be read out twice.
+              photo.alt = '';
               photo.loading = 'lazy';
             } else {
               photo.setAttribute('role', 'img');
