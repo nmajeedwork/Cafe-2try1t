@@ -68,7 +68,15 @@ function verifyDynamicToken(filename, exp, sig) {
 // on a call.
 const OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || 'mp3_22050_32';
 
-async function callElevenLabsTTS(text) {
+// H5 hardening: Twilio abandons a webhook that hasn't answered within 15 seconds and
+// drops the call with its generic "application error" message. A hung ElevenLabs
+// request used to have no limit at all, so it could hold the webhook past that
+// deadline. Now it is aborted after this long and speak() falls back to Twilio <Say>.
+// Callers with a tighter budget (server.js's /voice/continue, which has already spent
+// part of its 15 seconds waiting on Claude) pass a smaller timeoutMs.
+const ELEVENLABS_TIMEOUT_MS = 8000;
+
+async function callElevenLabsTTS(text, timeoutMs = ELEVENLABS_TIMEOUT_MS) {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   const voiceId = process.env.ELEVENLABS_VOICE_ID;
   if (!apiKey || !voiceId) {
@@ -76,26 +84,39 @@ async function callElevenLabsTTS(text) {
   }
 
   const startedAt = Date.now();
-  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${OUTPUT_FORMAT}`, {
-    method: 'POST',
-    headers: {
-      'xi-api-key': apiKey,
-      'Content-Type': 'application/json',
-      Accept: 'audio/mpeg'
-    },
-    body: JSON.stringify({ text, model_id: MODEL_ID })
-  });
+  // Covers the whole exchange, body download included, not just the response headers.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${OUTPUT_FORMAT}`, {
+      method: 'POST',
+      headers: {
+        'xi-api-key': apiKey,
+        'Content-Type': 'application/json',
+        Accept: 'audio/mpeg'
+      },
+      body: JSON.stringify({ text, model_id: MODEL_ID }),
+      signal: controller.signal
+    });
 
-  if (!response.ok) {
-    throw new Error(`ElevenLabs TTS request failed: ${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      throw new Error(`ElevenLabs TTS request failed: ${response.status} ${response.statusText}`);
+    }
+
+    const audio = Buffer.from(await response.arrayBuffer());
+    // See the matching [latency] log in server.js - this is the other half of a turn's
+    // time budget, generation only (doesn't include Twilio then fetching the file back
+    // over the ngrok tunnel for <Play>).
+    console.log(`[latency] ElevenLabs generation: ${Date.now() - startedAt}ms (${text.length} chars)`);
+    return audio;
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(`ElevenLabs TTS request timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-
-  const audio = Buffer.from(await response.arrayBuffer());
-  // See the matching [latency] log in server.js - this is the other half of a turn's
-  // time budget, generation only (doesn't include Twilio then fetching the file back
-  // over the ngrok tunnel for <Play>).
-  console.log(`[latency] ElevenLabs generation: ${Date.now() - startedAt}ms (${text.length} chars)`);
-  return audio;
 }
 
 function buildUrl(req, relPath) {
@@ -106,12 +127,12 @@ function buildUrl(req, relPath) {
 // they're generated once per unique text and reused forever after - the cache key is a
 // hash of the text itself, so two call sites with the same wording automatically share
 // one file, and edited wording just produces a new file rather than serving stale audio.
-async function getCachedAudioUrl(text, req) {
+async function getCachedAudioUrl(text, req, timeoutMs) {
   const filename = `${crypto.createHash('sha1').update(text).digest('hex').slice(0, 16)}.mp3`;
   const filePath = path.join(CACHE_DIR, filename);
 
   if (!fs.existsSync(filePath)) {
-    const audio = await callElevenLabsTTS(text);
+    const audio = await callElevenLabsTTS(text, timeoutMs);
     fs.writeFileSync(filePath, audio);
   }
 
@@ -123,12 +144,12 @@ async function getCachedAudioUrl(text, req) {
 // fetched it for <Play> - unref() so the timer can't keep the process alive or block
 // --watch restarts. The returned URL carries an HMAC-signed, ~120s expiry token that
 // the guarded /audio/dynamic route in server.js checks before serving (H4 hardening).
-async function getDynamicAudioUrl(text, req, callSid) {
+async function getDynamicAudioUrl(text, req, callSid, timeoutMs) {
   const safeCallSid = String(callSid).replace(/[^a-zA-Z0-9_-]/g, '');
   const filename = `${safeCallSid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.mp3`;
   const filePath = path.join(DYNAMIC_DIR, filename);
 
-  const audio = await callElevenLabsTTS(text);
+  const audio = await callElevenLabsTTS(text, timeoutMs);
   fs.writeFileSync(filePath, audio);
 
   setTimeout(() => {
@@ -142,12 +163,13 @@ async function getDynamicAudioUrl(text, req, callSid) {
 
 // Speaks `text` into `container` (a Twilio VoiceResponse or a <Gather> node - both
 // expose .say()/.play()) via ElevenLabs-generated audio, falling back to Twilio's own
-// <Say> if ElevenLabs is unavailable for any reason so a call never breaks.
-async function speak(container, text, { req, cache = false, callSid } = {}) {
+// <Say> if ElevenLabs is unavailable for any reason (including a timeout, see
+// ELEVENLABS_TIMEOUT_MS) so a call never breaks.
+async function speak(container, text, { req, cache = false, callSid, timeoutMs = ELEVENLABS_TIMEOUT_MS } = {}) {
   try {
     const url = cache
-      ? await getCachedAudioUrl(text, req)
-      : await getDynamicAudioUrl(text, req, callSid);
+      ? await getCachedAudioUrl(text, req, timeoutMs)
+      : await getDynamicAudioUrl(text, req, callSid, timeoutMs);
     container.play(url);
   } catch (err) {
     console.error('ElevenLabs TTS failed, falling back to Twilio <Say>:', err.message);
@@ -155,4 +177,4 @@ async function speak(container, text, { req, cache = false, callSid } = {}) {
   }
 }
 
-module.exports = { speak, signDynamicToken, verifyDynamicToken, DYNAMIC_DIR };
+module.exports = { speak, signDynamicToken, verifyDynamicToken, DYNAMIC_DIR, ELEVENLABS_TIMEOUT_MS };
