@@ -52,7 +52,7 @@ const session = require('express-session');
 const Anthropic = require('@anthropic-ai/sdk');
 const twilio = require('twilio');
 const VoiceResponse = twilio.twiml.VoiceResponse;
-const { speak, verifyDynamicToken, DYNAMIC_DIR } = require('./elevenlabs-tts');
+const { speak, verifyDynamicToken, DYNAMIC_DIR, ELEVENLABS_TIMEOUT_MS } = require('./elevenlabs-tts');
 const { saveInProgressOrder, clearInProgressOrder, findResumableOrder } = require('./voice-order-recovery');
 
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
@@ -747,7 +747,9 @@ function plainDashes(text) {
 // Shared by /chat (browser, cookie session) and the voice routes (phone call, keyed by
 // CallSid) so both transports go through identical tools and cart/order logic — only
 // the system prompt (stableSystemText) differs, since voice needs spoken-conversation rules.
-async function runCafeBotTurn(state, userMessage, stableSystemText) {
+// `signal` (optional, voice only) aborts any in-flight Anthropic request once the voice
+// turn's deadline passes - see VOICE_TURN_TIMEOUT_MS. /chat passes nothing.
+async function runCafeBotTurn(state, userMessage, stableSystemText, { signal } = {}) {
   // Blank history with an already-populated cart can only happen on the first turn of a
   // resumed call (a genuinely fresh session always starts with an empty cart) - check
   // before pushing this turn's message so it only fires once, on that first turn.
@@ -763,7 +765,7 @@ async function runCafeBotTurn(state, userMessage, stableSystemText) {
     system: systemBlocks,
     tools: TOOLS,
     messages: withCacheBreakpoint(state.history)
-  });
+  }, { signal });
   logCacheUsage(response.usage);
 
   let rounds = 0;
@@ -786,7 +788,7 @@ async function runCafeBotTurn(state, userMessage, stableSystemText) {
       system: systemBlocks,
       tools: TOOLS,
       messages: withCacheBreakpoint(state.history)
-    });
+    }, { signal });
 
     logCacheUsage(response.usage);
     rounds += 1;
@@ -831,6 +833,8 @@ function getVoiceSession(callSid) {
   }
   const state = voiceSessions.get(callSid);
   initSessionState(state);
+  // Read by sweepIdleVoiceSessions to find calls that ended by hangup (see there).
+  state.lastActivityAt = Date.now();
   return state;
 }
 
@@ -1040,7 +1044,7 @@ app.post('/chat', ...costEndpointLimiters, async (req, res) => {
 // reply (already spoken right before this) almost always ends with a natural follow-up
 // question of its own, and repeating a generic "What else can I get for you?" on top of
 // that every single turn read as robotic and redundant.
-async function addGather(twiml, promptText, req, { cache = true, callSid } = {}) {
+async function addGather(twiml, promptText, req, { cache = true, callSid, timeoutMs } = {}) {
   const gather = twiml.gather({
     input: 'speech',
     action: '/voice/process-speech',
@@ -1075,7 +1079,7 @@ async function addGather(twiml, promptText, req, { cache = true, callSid } = {})
   // as soon as it detects the caller talking. A prompt played *before* a separate
   // <Gather> only starts being listened to once it's already finished — no barge-in.
   if (promptText) {
-    await speak(gather, promptText, { req, cache, callSid });
+    await speak(gather, promptText, { req, cache, callSid, timeoutMs });
 
     // Stamped so a later barge-in-cutoff check (see isBargeInCutoff in
     // /voice/process-speech) knows what was playing and roughly when it started — without
@@ -1101,6 +1105,32 @@ function speakable(text) {
   return text.replace(/2try1t/gi, 'To Try It');
 }
 
+// H5 hardening: the saved in-progress order (voice-order-recovery.js) is keyed on the
+// caller's number, so every caller who withholds their number would otherwise share ONE
+// saved-order file, and one could be offered another's abandoned cart. Returns the
+// number only when it can safely identify a single caller, otherwise null, which every
+// voice-order-recovery function already treats as "nothing to read or write".
+//   - Missing, "anonymous", "unknown", "restricted", or anything else that isn't E.164
+//     fails the pattern.
+//   - Twilio doesn't send those words for a withheld caller ID, though: it sends a
+//     keypad-spelled placeholder that IS shaped like E.164 (+266696687 spells
+//     ANONYMOUS), so the known placeholders are rejected explicitly too.
+const E164_PATTERN = /^\+[1-9]\d{1,14}$/;
+const WITHHELD_CALLER_PLACEHOLDERS = new Set([
+  '+266696687', // ANONYMOUS
+  '+7378742833', // RESTRICTED
+  '+2562533', // BLOCKED
+  '+86282452253' // UNAVAILABLE
+]);
+
+function resumableCallerNumber(from) {
+  const number = typeof from === 'string' ? from.trim() : '';
+  if (!E164_PATTERN.test(number) || WITHHELD_CALLER_PLACEHOLDERS.has(number)) {
+    return null;
+  }
+  return number;
+}
+
 // Twilio calls this webhook when someone dials the café's number. Starts the same
 // tool-use conversation /chat uses — see runCafeBotTurn — just reached by phone instead
 // of the browser widget, with CallSid standing in for a browser session cookie.
@@ -1108,6 +1138,12 @@ app.post('/voice/incoming', validateTwilioRequest, async (req, res) => {
   const twiml = new VoiceResponse();
   const callSid = req.body.CallSid;
   const from = req.body.From;
+
+  // H5: the max-call-duration cap (MAX_CALL_MINUTES) is measured from this first webhook.
+  const state = getVoiceSession(callSid);
+  if (!state.callStartedAt) {
+    state.callStartedAt = Date.now();
+  }
 
   // If this caller had an order in progress from a recent dropped call, restore it into
   // the new call's session before the first turn — the cart/order tools are the source of
@@ -1118,10 +1154,9 @@ app.post('/voice/incoming', validateTwilioRequest, async (req, res) => {
   // inconsistent (sometimes disclosed, sometimes not) since nothing told it whether or
   // when to bring it up. Baking it into the cached greeting means it's said exactly
   // once, every call, deterministically.
-  const resumable = findResumableOrder(from);
+  const resumable = findResumableOrder(resumableCallerNumber(from));
   let greeting = "Thanks for calling To Try It, you're speaking with our AI ordering assistant. What can I get started for you?";
   if (resumable) {
-    const state = getVoiceSession(callSid);
     state.cart = resumable.cart;
     state.order = resumable.order;
     greeting = "Welcome back to To Try It, you're speaking with our AI ordering assistant — looks like you had an order in progress from a moment ago. Want to pick up where you left off, or start fresh?";
@@ -1244,6 +1279,45 @@ function pickFillerPhrase(state) {
 // entries are removed as soon as /voice/continue consumes them.
 const pendingVoiceReplies = new Map();
 
+// --- H5 hardening: voice timeouts -----------------------------------------------------
+// Twilio abandons any webhook that hasn't answered within 15 seconds and drops the call
+// with its generic "application error" message. /voice/continue is the tight one: it
+// waits on the Claude turn, then generates the reply audio, all inside one webhook.
+//   - VOICE_TURN_TIMEOUT_MS caps the whole Claude turn (every tool round and SDK retry),
+//     measured from when /voice/process-speech kicks it off. Past it the caller hears
+//     the existing "trouble right now" line instead of a dropped call.
+//   - VOICE_CONTINUE_BUDGET_MS is the most /voice/continue may spend before answering;
+//     the reply's ElevenLabs request gets whatever is left (never more than
+//     ELEVENLABS_TIMEOUT_MS), and falls back to <Say> if it runs out.
+// Worst case: /voice/continue arrives about a second into the turn (after the filler
+// plays), waits up to ~9s for Claude, then gives ElevenLabs the ~4s left, answering
+// within ~13s and leaving ~2s for network and TwiML.
+const VOICE_TURN_TIMEOUT_MS = 10 * 1000;
+const VOICE_CONTINUE_BUDGET_MS = 13 * 1000;
+
+// --- H5 hardening: idle voice-session sweep -------------------------------------------
+// voiceSessions entries are only deleted when a call ends through one of our own paths
+// (farewell, silence, a call cap). A caller who simply hangs up leaves their entry,
+// conversation history included, in memory until the process restarts, since there's no
+// Twilio status callback to say the call is over. This sweep removes entries idle past
+// VOICE_SESSION_IDLE_MS. An active call touches its entry every few seconds (every
+// <Gather> waits at most 10s before calling back), and MAX_CALL_MINUTES ends any call
+// well before 30 minutes, so a live call is never swept. unref() so the timer never keeps
+// the process alive or blocks --watch restarts.
+const VOICE_SESSION_IDLE_MS = 30 * 60 * 1000;
+const VOICE_SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+function sweepIdleVoiceSessions(now = Date.now()) {
+  for (const [callSid, state] of voiceSessions) {
+    if (now - (state.lastActivityAt || 0) > VOICE_SESSION_IDLE_MS) {
+      voiceSessions.delete(callSid);
+      pendingVoiceReplies.delete(callSid);
+    }
+  }
+}
+
+setInterval(sweepIdleVoiceSessions, VOICE_SESSION_SWEEP_INTERVAL_MS).unref();
+
 function isFarewell(text, confidence) {
   const confidenceValue = parseFloat(confidence);
   if (!Number.isFinite(confidenceValue) || confidenceValue < FAREWELL_CONFIDENCE_THRESHOLD) {
@@ -1280,6 +1354,58 @@ const SILENCE_REPROMPTS = [
   "Just checking you're still with me — whenever you're ready."
 ];
 
+// --- H5 hardening: per-call hard caps -------------------------------------------------
+// Before this, nothing bounded a single call: a looping recording or a noisy line could
+// keep it going (and billing Twilio, Anthropic, and ElevenLabs) indefinitely. Each cap is
+// tracked on the call's own voiceSessions state; hitting any of them ends the call via
+// endCallForLimit. Tunable without a code change (defaults in parens); a missing,
+// non-numeric, zero, or negative value falls back to the default.
+//   MAX_CALL_TURNS    - Claude turns per call (30). Generous: a full order with a
+//                       few questions and corrections is around 15.
+//   MAX_CALL_MINUTES  - call length, from the first /voice/incoming webhook (12).
+//                       Decimals allowed.
+//   MAX_GARBLED_IN_ROW - consecutive below-MIN_SPEECH_CONFIDENCE reprompts (4). Only
+//                       understood speech resets the count; silence and barge-in noise
+//                       in between don't, so a line that is pure noise still ends.
+function positiveNumberFromEnv(name, fallback, { integer = false } = {}) {
+  const value = Number(process.env[name]);
+  const valid = Number.isFinite(value) && value > 0 && (!integer || Number.isInteger(value));
+  return valid ? value : fallback;
+}
+
+const MAX_CALL_TURNS = positiveNumberFromEnv('MAX_CALL_TURNS', 30, { integer: true });
+const MAX_CALL_MINUTES = positiveNumberFromEnv('MAX_CALL_MINUTES', 12);
+const MAX_CALL_MS = MAX_CALL_MINUTES * 60 * 1000;
+const MAX_GARBLED_IN_ROW = positiveNumberFromEnv('MAX_GARBLED_IN_ROW', 4, { integer: true });
+
+// Cached static lines like the other stock phrases. "15 minutes" matches
+// RESUME_WINDOW_MS in voice-order-recovery.js.
+const LIMIT_GOODBYE_ORDER_SAVED =
+  "I'm sorry, I have to end the call here. Your order is saved, so call back within 15 minutes and we can pick up right where you left off. Goodbye!";
+const LIMIT_GOODBYE = "I'm sorry, I have to end the call here. Please feel free to call back anytime. Goodbye!";
+
+// Ends a call that hit one of the caps above. If an unconfirmed order is in the cart, it
+// is saved for callback resume FIRST, synchronously, before any TwiML is sent, so the
+// "call back within 15 minutes" promise is true. Saving also refreshes the resume
+// window to start now. A caller with a withheld number gets nothing saved (see
+// resumableCallerNumber), so they hear the plain goodbye instead of a promise we can't keep.
+async function endCallForLimit(twiml, req, res, { callSid, state, from, reason }) {
+  const orderKey = resumableCallerNumber(from);
+  const orderSaved = !!orderKey && state.cart.length > 0 && !state.order.confirmed;
+  if (orderSaved) {
+    saveInProgressOrder({ from: orderKey, callSid, cart: state.cart, order: state.order });
+  }
+  console.warn(`[call limit] ${reason} reached, ending call${orderSaved ? ' (in-progress order saved for callback)' : ''}.`);
+
+  await speak(twiml, orderSaved ? LIMIT_GOODBYE_ORDER_SAVED : LIMIT_GOODBYE, { req, cache: true });
+  twiml.hangup();
+  voiceSessions.delete(callSid);
+  pendingVoiceReplies.delete(callSid);
+
+  res.type('text/xml');
+  return res.send(twiml.toString());
+}
+
 // Twilio POSTs here with the transcribed text every time a <Gather> above completes —
 // both the very first thing the caller says, and every reply after that, since the
 // re-prompt below points back at this same route to keep the conversation looping.
@@ -1295,8 +1421,19 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   // "please repeat" reply landed, instead of only the pass/fail outcome.
   console.log(`[speech] confidence=${req.body.Confidence || 'n/a'} transcript="${speechResult || ''}"`);
 
+  const state = getVoiceSession(callSid);
+
+  // H5: max call duration. callStartedAt is normally stamped by /voice/incoming; set it
+  // here too in case this process never saw that webhook (e.g. it restarted mid-call),
+  // so the cap still applies from now on.
+  if (!state.callStartedAt) {
+    state.callStartedAt = Date.now();
+  }
+  if (Date.now() - state.callStartedAt > MAX_CALL_MS) {
+    return endCallForLimit(twiml, req, res, { callSid, state, from, reason: `max call duration (${MAX_CALL_MINUTES} min)` });
+  }
+
   if (!speechResult) {
-    const state = getVoiceSession(callSid);
     state.silenceStrikes = (state.silenceStrikes || 0) + 1;
 
     if (state.silenceStrikes > MAX_SILENCE_STRIKES) {
@@ -1310,21 +1447,6 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
     await addGather(twiml, repromptText, req, { callSid });
     res.type('text/xml');
     return res.send(twiml.toString());
-  }
-
-  // Handled before Claude ever sees it - a bare "bye" ends the call immediately instead
-  // of going through a full model turn - but only when that's actually safe: if there's
-  // an unconfirmed order sitting in the cart, this canned line would end the call
-  // without ever telling the customer their order wasn't placed. In that case fall
-  // through to the normal model turn instead, so Claude can respond per the "Ending the
-  // Call" prompt rules (still a natural goodbye, but aware of the real order state).
-  const existingState = voiceSessions.get(callSid);
-  const state = getVoiceSession(callSid);
-
-  // Real speech came back in, so the caller wasn't gone — just paused. Give the next
-  // silence its own full grace period rather than picking up where this one left off.
-  if (existingState) {
-    existingState.silenceStrikes = 0;
   }
 
   const speechConfidence = parseFloat(req.body.Confidence);
@@ -1363,23 +1485,49 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   // See MIN_SPEECH_CONFIDENCE above — filters out low-confidence speech for turns that
   // weren't a barge-in cutoff (the case above already handled that one), same as before.
   if (Number.isFinite(speechConfidence) && speechConfidence < MIN_SPEECH_CONFIDENCE) {
+    // H5: a line that is nothing but noise used to loop on this reprompt forever.
+    state.garbledInRow = (state.garbledInRow || 0) + 1;
+    if (state.garbledInRow > MAX_GARBLED_IN_ROW) {
+      return endCallForLimit(twiml, req, res, { callSid, state, from, reason: `max garbled reprompts in a row (${MAX_GARBLED_IN_ROW})` });
+    }
     console.warn(`Speech below confidence guard (${speechConfidence.toFixed(2)} < ${MIN_SPEECH_CONFIDENCE}): "${speechResult}"`);
     await addGather(twiml, "Sorry, I didn't quite catch that — go ahead.", req, { callSid });
     res.type('text/xml');
     return res.send(twiml.toString());
   }
 
-  const hasUnconfirmedOrder = !!existingState && existingState.cart.length > 0 && !existingState.order.confirmed;
+  // Understood speech came back in, so the caller wasn't gone, just paused. Give the next
+  // silence its own full grace period rather than picking up where this one left off,
+  // and restart the garbled count. H5: this used to run before the noise and confidence
+  // checks above, so garbled speech reset the silence count too, and a noisy line could
+  // never reach MAX_SILENCE_STRIKES.
+  state.silenceStrikes = 0;
+  state.garbledInRow = 0;
+
+  // Handled before Claude ever sees it - a bare "bye" ends the call immediately instead
+  // of going through a full model turn - but only when that's actually safe: if there's
+  // an unconfirmed order sitting in the cart, this canned line would end the call
+  // without ever telling the customer their order wasn't placed. In that case fall
+  // through to the normal model turn instead, so Claude can respond per the "Ending the
+  // Call" prompt rules (still a natural goodbye, but aware of the real order state).
+  const hasUnconfirmedOrder = state.cart.length > 0 && !state.order.confirmed;
 
   if (isFarewell(speechResult, req.body.Confidence) && !hasUnconfirmedOrder) {
     // hasUnconfirmedOrder is false here, so there's nothing genuinely in progress — but
     // clear anyway in case this call had resumed an older saved order and is now done.
-    clearInProgressOrder(from);
+    clearInProgressOrder(resumableCallerNumber(from));
     await speak(twiml, 'Thanks for calling To Try It, goodbye!', { req, cache: true });
     voiceSessions.delete(callSid);
     res.type('text/xml');
     return res.send(twiml.toString());
   }
+
+  // H5: max Claude turns per call. Checked before starting the turn, so the call gets
+  // MAX_CALL_TURNS full turns and the next understood utterance gets the goodbye.
+  if ((state.claudeTurns || 0) >= MAX_CALL_TURNS) {
+    return endCallForLimit(twiml, req, res, { callSid, state, from, reason: `max Claude turns (${MAX_CALL_TURNS})` });
+  }
+  state.claudeTurns = (state.claudeTurns || 0) + 1;
 
   const claudeStartedAt = Date.now();
 
@@ -1390,12 +1538,29 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
   // up once Twilio finishes playing the filler and redirects back. Starting the call here
   // (rather than after the filler plays) means the filler doesn't add to the real wait —
   // it just fills time that was going to pass anyway.
-  const turnPromise = runCafeBotTurn(state, speechResult, STABLE_SYSTEM_TEXT_VOICE)
+  //
+  // H5: raced against VOICE_TURN_TIMEOUT_MS. The race is what guarantees the deadline
+  // (an SDK retry can sleep without checking the abort signal); the abort stops any
+  // in-flight Anthropic request so a turn nobody will hear stops costing tokens. Either
+  // way a timeout lands in the same .catch as any other API error.
+  const turnController = new AbortController();
+  let turnTimer;
+  const turnDeadline = new Promise((resolve, reject) => {
+    turnTimer = setTimeout(() => {
+      turnController.abort();
+      reject(new Error(`Voice turn exceeded ${VOICE_TURN_TIMEOUT_MS}ms`));
+    }, VOICE_TURN_TIMEOUT_MS);
+  });
+  const turnPromise = Promise.race([
+    runCafeBotTurn(state, speechResult, STABLE_SYSTEM_TEXT_VOICE, { signal: turnController.signal }),
+    turnDeadline
+  ])
     .then((result) => ({ replyText: speakable(result.reply), cacheReply: false }))
     .catch((err) => {
       console.error('Anthropic API error (voice):', err);
       return { replyText: "Sorry, I'm having trouble right now. Please try again in a moment.", cacheReply: true };
-    });
+    })
+    .finally(() => clearTimeout(turnTimer));
   pendingVoiceReplies.set(callSid, { turnPromise, state, from, claudeStartedAt });
 
   // No <Gather> here on purpose - this is a brief acknowledgment, not a real prompt, so
@@ -1415,6 +1580,7 @@ app.post('/voice/process-speech', validateTwilioRequest, async (req, res) => {
 // whole time the filler played plus this redirect's own round-trip - so this is mostly just
 // picking up the result and speaking it, not adding a second wait on top of the filler.
 app.post('/voice/continue', validateTwilioRequest, async (req, res) => {
+  const continueStartedAt = Date.now();
   const twiml = new VoiceResponse();
   const callSid = req.body.CallSid;
 
@@ -1443,18 +1609,27 @@ app.post('/voice/continue', validateTwilioRequest, async (req, res) => {
   // Write-through after every turn, not just on hangup — there's no Twilio status
   // callback wired up to tell this app when a call actually drops, so this is what
   // guarantees a dropped call never loses more than the current exchange. See
-  // voice-order-recovery.js.
+  // voice-order-recovery.js. H5: a withheld number resolves to null here, so nothing is
+  // read or written under a key shared by every withheld caller.
+  const orderKey = resumableCallerNumber(from);
   if (state.order.confirmed || state.cart.length === 0) {
-    clearInProgressOrder(from);
+    clearInProgressOrder(orderKey);
   } else {
-    saveInProgressOrder({ from, callSid, cart: state.cart, order: state.order });
+    saveInProgressOrder({ from: orderKey, callSid, cart: state.cart, order: state.order });
   }
+
+  // H5: the reply's ElevenLabs request gets only what's left of this webhook's budget
+  // after waiting on Claude (see VOICE_CONTINUE_BUDGET_MS); past that it falls back to <Say>.
+  const ttsTimeoutMs = Math.max(
+    1000,
+    Math.min(ELEVENLABS_TIMEOUT_MS, VOICE_CONTINUE_BUDGET_MS - (Date.now() - continueStartedAt))
+  );
 
   // Loop back into another <Gather> so the call keeps going instead of ending after
   // one exchange — this is what turns it into a real back-and-forth conversation.
   // CafeBot's reply is the Gather's own nested prompt (not a separate <Play> before
   // it) so the caller can barge in over it, same as every other turn.
-  await addGather(twiml, replyText, req, { cache: cacheReply, callSid });
+  await addGather(twiml, replyText, req, { cache: cacheReply, callSid, timeoutMs: ttsTimeoutMs });
 
   // No fallback verb needed here — actionOnEmptyResult (set in addGather) means a
   // silence timeout on this gather still POSTs back to /voice/process-speech, where the
@@ -1518,6 +1693,7 @@ if (require.main === module) {
   });
 }
 
-// Exported for the hours/timezone unit tests only — nothing about how the app runs
+// Exported for tests only (the hours/timezone unit tests, and the H5 voice harness, which
+// inspects voiceSessions and drives the idle sweep) — nothing about how the app runs
 // depends on this export existing.
-module.exports = { getCafeNow, validateOrderTiming, buildSystemBlocks };
+module.exports = { getCafeNow, validateOrderTiming, buildSystemBlocks, voiceSessions, sweepIdleVoiceSessions };
