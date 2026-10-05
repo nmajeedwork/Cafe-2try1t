@@ -1,7 +1,8 @@
-# 2try1t CafeBot Hardening Report (H1-H4)
+# 2try1t CafeBot Hardening Report (H1-H5)
 
-Permanent record of the four security hardening passes applied to the CafeBot
-server after the Step 16 security audit. Each pass was developed on its own
+Permanent record of the security hardening passes applied to the CafeBot server.
+H1-H4 followed the Step 16 security audit; H5 followed a later investigation into
+what an automated or spam caller could do to the phone line. Each pass was developed on its own
 branch, verified with an automated test harness plus a real-world test, reviewed
 as a pull request, and merged to `main` only after the user personally confirmed
 the one scenario most likely to break real usage.
@@ -9,11 +10,12 @@ the one scenario most likely to break real usage.
 - **Report written:** 2026-09-09.
 - **Starting point:** `main` at commit `4186b35`, the state of the server after
   the redesign work and the Step 16 audit, before any hardening.
-- **End state:** `main` at commit `c8e1e68`, all four passes merged.
-- **Scope:** `server.js` throughout, plus `elevenlabs-tts.js` (H4) and
+- **End state:** `main` at commit `c8e1e68`, all four passes merged. H5 was added
+  on 2026-10-04 and merged as `50a439d`.
+- **Scope:** `server.js` throughout, plus `elevenlabs-tts.js` (H4, H5) and
   `package.json` / `package-lock.json` (H1, one new dependency). No changes to
-  `voice-order-recovery.js`, the Anthropic tool-use logic, the menu/deal data,
-  or the static site pages.
+  `voice-order-recovery.js`, the Anthropic tool-use logic, the prompts, the
+  menu/deal data, or the static site pages.
 
 | Pass | Branch | Feature commit | PR | Merge commit | Date |
 |---|---|---|---|---|---|
@@ -21,8 +23,9 @@ the one scenario most likely to break real usage.
 | H2 | `harden-env-gating`        | `316e806` | [#6](https://github.com/nmajeedwork/Cafe-2try1t/pull/6) | `cdf102b` | 2026-09-05 |
 | H3 | `harden-session-cookie`    | `2049cce` | [#7](https://github.com/nmajeedwork/Cafe-2try1t/pull/7) | `871099f` | 2026-09-09 |
 | H4 | `harden-audio-signed-urls` | `60d5843` | [#8](https://github.com/nmajeedwork/Cafe-2try1t/pull/8) | `c8e1e68` | 2026-09-09 |
+| H5 | `harden-voice-limits`      | `5a2276a` | [#15](https://github.com/nmajeedwork/Cafe-2try1t/pull/15) | `50a439d` | 2026-10-04 |
 
-A safe-by-default principle runs through all four: anything that is not
+A safe-by-default principle runs through H1-H4: anything that is not
 explicitly `NODE_ENV=development` (unset, `production`, a typo) is treated as
 production and locked down. The permissive state is never the default.
 
@@ -302,6 +305,116 @@ written straight into the dynamic directory for the route tests).
 
 ---
 
+## H5 - Voice-call abuse limits and voice robustness
+
+**PR [#15](https://github.com/nmajeedwork/Cafe-2try1t/pull/15), feature commit `5a2276a`, merged as `50a439d`.**
+Files: `server.js`, `elevenlabs-tts.js`.
+
+### Audit finding
+
+A read-only investigation asked what happens when a robocall, a silent call, or
+a recording playing on a loop dials the café's Twilio number. It found:
+
+- **Nothing bounded a single call.** There was no cap on Claude turns or call
+  length, and Claude itself cannot end a call. A clearly spoken recording became
+  a billed Claude turn plus a fresh ElevenLabs generation on every pass, for as
+  long as the caller stayed on the line. Estimated worst case: about $0.25 to
+  $0.75 per minute per call across Twilio, Anthropic, and ElevenLabs.
+- **A noisy line looped forever.** Speech below the 0.28 confidence guard got a
+  cached "didn't quite catch that" reprompt with no limit. Worse, it reset the
+  silence counter first, so a line full of hum or music could never reach the
+  silence limit either.
+- **No timeouts.** The ElevenLabs request had no timeout, and the voice Claude
+  turn used the SDK default (10 minutes, retried). Either one hanging could hold
+  a webhook past Twilio's 15-second deadline, which drops the call with Twilio's
+  generic "application error" message.
+- **Withheld numbers shared one saved order.** The in-progress order file is
+  keyed on the caller's number, so every caller who withheld theirs mapped to the
+  same file, and one could be offered another's abandoned cart.
+- **Sessions leaked on hangup.** A call's in-memory state was only deleted when
+  it ended through one of the app's own paths. A caller who just hung up left
+  theirs, conversation history included, in memory until the next restart.
+- The voice routes have no rate limiting and nothing is keyed on the caller's
+  number. That was confirmed, and left as a separate future decision (see
+  "Not in this pass" below).
+
+### Implemented
+
+- **Per-call hard caps**, tracked on each call's own state and configurable via
+  environment variables. A missing, non-numeric, zero, or negative value falls
+  back to the default.
+  - `MAX_CALL_TURNS`: 30 Claude turns per call. Checked before a turn starts, so
+    nothing is spent past the cap. A full real order is around 15 turns.
+  - `MAX_CALL_MINUTES`: 12 minutes, measured from the first `/voice/incoming`
+    webhook for that call. Checked first on every webhook.
+  - `MAX_GARBLED_IN_ROW`: 4 garbled-speech reprompts in a row. Only understood
+    speech resets the count, so silence and barge-in noise in between can't
+    reset it.
+- **Ending a call on a cap.** A polite cached goodbye, then `<Hangup/>`, then the
+  call's state is cleared. If an unconfirmed order is in the cart, it is saved
+  synchronously before the reply is sent, and the goodbye says the caller can call
+  back within 15 minutes to pick it up. Saving also restarts the 15-minute resume
+  window. A withheld caller has nothing saved, so they hear a plain goodbye
+  instead of a promise that couldn't be kept.
+- **Silence-counter fix.** The silence and garbled counters now reset only after
+  speech passes the noise and confidence checks, so garbled speech no longer
+  resets the silence counter.
+- **Timeouts, kept inside Twilio's 15-second webhook deadline.**
+  - ElevenLabs requests abort after 8 seconds (`AbortController`, covering the
+    body download too) and fall back to Twilio `<Say>`.
+  - A voice Claude turn is raced against a 10-second deadline (every tool round
+    and SDK retry included), and its in-flight requests are aborted. A timeout
+    takes the existing "having trouble right now" path and the call continues.
+  - `/voice/continue`, which waits for Claude and then voices the reply inside
+    one webhook, has a 13-second budget. The reply's ElevenLabs request gets only
+    what is left of it. Worst case answers in about 13 seconds.
+  - `/chat` is unchanged.
+- **Withheld-number handling.** No saved order is read or written when the
+  caller's number is missing, isn't valid E.164, or is one of Twilio's
+  keypad-spelled placeholders for a withheld caller ID (`+266696687` spells
+  ANONYMOUS, plus RESTRICTED, BLOCKED, and UNAVAILABLE). Twilio sends the
+  placeholder, not the word, which is why an E.164 check alone wasn't enough.
+- **Idle-session sweep.** An unref'd timer runs every 5 minutes and removes call
+  state idle for more than 30 minutes. A live call is never swept, since every
+  `<Gather>` calls back within 10 seconds and the 12-minute cap ends calls well
+  before 30. No Twilio console setting is needed.
+
+### Verification
+
+Automated harness, zero Anthropic, ElevenLabs, or Twilio spend: signed Twilio
+webhooks (generated with Twilio's own signing function), a fake Anthropic API
+reached through `ANTHROPIC_BASE_URL` so the real SDK ran, a fake ElevenLabs
+endpoint, and child servers started from a directory with no `.env`. **52 of 52
+checks passed**, plus the 14 hours regression tests.
+
+| Area | Result |
+|---|---|
+| turn cap (lowered to 3) | 4th utterance ended with the goodbye and `<Hangup/>`; 0 Claude requests past the cap; state cleared |
+| duration cap (lowered to 3 seconds) | next webhook ended the call, checked before silence handling |
+| garbled cap (lowered to 2) | 3rd garbled result in a row ended the call |
+| order in progress at a cap | order file on disk before the hangup reply; calling back resumed it |
+| default values | confirmed exactly 30 turns, 12 minutes, 4 garbled; invalid env values fall back to them |
+| silence-counter fix | silence, garbled, silence, garbled, silence now ends via the silence limit; understood speech still resets it |
+| continuous noise arriving mid-prompt | still ended via the garbled cap |
+| withheld numbers (6 forms, including `+266696687` and a missing number) | no resume offered, nothing saved; normal callers unchanged |
+| ElevenLabs hang | fell back to `<Say>` in about 8 seconds and the call continued, on both cached and per-call audio |
+| Claude hang | "having trouble right now" at about 10 seconds; the in-flight request was aborted; the next turn worked |
+| worst case (Claude at 9.5 seconds plus ElevenLabs hang) | answered in 13.0 seconds |
+| normal 15-turn order, default limits | confirmed order, no cap hit, ended with the normal farewell |
+| idle sweep | session idle 29 minutes kept, 31 minutes removed |
+| H1-H4 regression | voice signature checks (403 on bad or missing), `/chat` limit and cookie flags, signed audio 404 on tamper, production start-up guards: all unchanged |
+
+- **Real phone calls:** the user verified the deployed build with live calls: a
+  normal order, a call from a hidden number, and a cap test.
+
+### Not in this pass
+
+Per-caller rate limiting and blocking of repeat callers were identified as
+options but not built. Neither limits a single call, and both need a policy for
+withheld numbers and storage that survives Render deploys.
+
+---
+
 ## Environment variables introduced or newly load-bearing
 
 | Variable | Introduced / affected by | Default | Behavior |
@@ -313,6 +426,9 @@ written straight into the dynamic directory for the route tests).
 | `DISABLE_HOURS_CHECK` | H2 | unset | `true` outside development refuses startup |
 | `FORCE_HOURS_CLOSED` | H2 | unset | `true` outside development refuses startup |
 | `SESSION_SECRET` | H3, reused by H4 | `dev-secret` fallback, dev only | must be a real secret outside development or the server refuses to start; also the HMAC key for signed audio URLs |
+| `MAX_CALL_TURNS` | H5 | `30` | Claude turns per phone call before it ends with the goodbye |
+| `MAX_CALL_MINUTES` | H5 | `12` | phone call length from the first webhook; decimals allowed |
+| `MAX_GARBLED_IN_ROW` | H5 | `4` | garbled-speech reprompts in a row before the call ends |
 
 ## Deploying to production: checklist
 
@@ -325,3 +441,5 @@ written straight into the dynamic directory for the route tests).
    `trust proxy: 1` resolves `req.ip` and `req.protocol` correctly.
 5. Optionally tune `RATE_LIMIT_MAX` and `RATE_LIMIT_GLOBAL_MAX` for expected
    traffic.
+6. Leave `MAX_CALL_TURNS`, `MAX_CALL_MINUTES`, and `MAX_GARBLED_IN_ROW` unset to
+   use the defaults, and remove any lowered values left over from testing.
