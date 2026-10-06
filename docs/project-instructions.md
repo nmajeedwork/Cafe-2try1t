@@ -9,8 +9,10 @@ Nmajeed is building an AI ordering agent ("CafeBot") for a café called 2try1t, 
 * Backend: Node.js + Express
 * Frontend: Plain HTML/JS (no framework)
 * AI: Claude API with tool use (function calling)
-* Data storage: JSON files (menu.json, deals.json) / SQLite for orders
-* Telephony (in progress): Twilio Voice
+* Data storage: No database yet. menu.json and deals.json are read at boot. Confirmed orders are not persisted.
+* Telephony: Twilio Voice (complete)
+* Voice TTS: ElevenLabs, falling back to Twilio `<Say>` if a request fails or times out
+* Hosting: Render free tier
 * Git: repo-local identity — n.majeed.work@gmail.com / Nmajeed
 
 ## Working Conventions
@@ -23,6 +25,10 @@ Nmajeed is building an AI ordering agent ("CafeBot") for a café called 2try1t, 
 * Business logic decisions (deal stacking rules, validation behavior, etc.) should be confirmed with Nmajeed before implementation, not assumed.
 * Server-side/tool-level validation is preferred over relying on prompt instructions alone for anything safety- or accuracy-critical (pricing, totals, hours validation, order confirmation gating).
 * Claude Code must always work directly in the project folder — never create worktrees or separate checkouts, even for read-only audits. Use `git show` / `git diff` / `git log` instead if inspection without disturbing the working tree is needed. This caused a real mix-up once (an audit run in a separate worktree reported the repo as clean while uncommitted work sat untouched in the real folder).
+* Code changes go on a new branch off main and land through a PR that Nmajeed reviews and merges. Docs-only changes can be committed straight to main.
+* Two project commands live in `.claude/commands`: `/wrapup` (review, confirm, commit, then push or open a PR) and `/cleanup-branch` (after a merge: sync main, verify the merge, delete the branch, prune remote refs).
+* No em dashes or en dashes in shipped copy, bot output, or docs. Use plain punctuation instead.
+* Model choice for Claude Code sessions: Opus for planning, architecture, and security judgment; Sonnet for well-specified build work. Flag it when a task needs Opus.
 
 ## Project Status (update as milestones complete)
 
@@ -65,7 +71,11 @@ Using Twilio Voice. Broken into sub-milestones:
 
 CafeBot is live at https://cafe-2try1t.onrender.com/. Both browser chat and voice ordering have been verified working end-to-end on the actual production deployment, not just local testing, including a complete real phone order that produced a valid order ID.
 
-The visual redesign, all four security hardening passes (H1-H4), and deployment are all complete. See [redesign-report.md](redesign-report.md) and [hardening-report.md](hardening-report.md) for details.
+The visual redesign, all five security hardening passes (H1-H5), and deployment are all complete. See [redesign-report.md](redesign-report.md) and [hardening-report.md](hardening-report.md) for details.
+
+* H5 (voice limits): per-call caps of 30 turns, 12 minutes, and 4 garbled replies in a row; timeouts on ElevenLabs and Anthropic calls so a reply always lands inside Twilio's 15 second webhook deadline; withheld-caller handling (no order resume or save for hidden numbers); and an idle-session sweep that clears abandoned call state.
+* A Promptfoo red-team run against CafeBot scored 60/60.
+* Two simultaneous live callers were verified on the production deployment.
 
 ## Future/deferred (not yet scoped)
 
@@ -81,9 +91,23 @@ Goal: replace the static menu.json with live inventory tracking, and give Nmajee
 
 Known scope, roughly comparable in size to the visual redesign effort:
 * Requires a real database (menu.json's flat-file model doesn't support live read/write updates)
-* Requires authentication for the dashboard. An unauthenticated admin panel would undo the H1-H4 hardening work
+* Requires authentication for the dashboard. An unauthenticated admin panel would undo the H1-H5 hardening work
 * Requires new/updated agent tools so CafeBot checks and decrements stock, not just reads a static list
 * Requires a dashboard UI to be designed and built
+
+Decisions made so far:
+* Stock is a simple in-stock / out-of-stock toggle per item, not counted quantities.
+* One admin account (Nmajeed). No multi-user roles.
+* v1 is the stock toggle only. Item and price editing and order viewing are out of v1, but the design must not block adding them later.
+
+Constraints:
+* A hosted database is needed, because Render's free tier has no persistent disk. Anything written to the local filesystem is lost on every redeploy or restart.
+* The `/api/menu` response shape stays unchanged, so the existing site pages keep working without edits.
+* Item names are the keys that link stock state to menu items.
+* Stock is enforced server-side (an out-of-stock item cannot be added to a cart at the tool level), not only through prompt instructions.
+* The cached system prompt block stays byte-identical. Live stock state goes in a separate block after the cache breakpoint, so stock changes never break prompt caching.
+* Voice latency budget: a stock lookup must not push a voice turn past the H5 timeouts or Twilio's 15 second webhook deadline.
+* Admin login is built and verified to the same rigor as the H1-H5 hardening passes.
 
 Not started. Treat as its own project phase (plan, approve, implement, same working convention as everything else) once picked up. Don't fold into an existing milestone.
 
