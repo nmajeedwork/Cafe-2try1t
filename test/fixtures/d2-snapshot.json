@@ -1,0 +1,11 @@
+{
+  "note": "Captured from main before D2 (unmodified server). Prompt hashes are over LF-normalised text.",
+  "apiMenu": {
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "bytes": 4018,
+    "sha256": "42b129c49636a2fb6f1fd63e66e8fa66bde3ac8a14280629ddc9e073b198428e"
+  },
+  "stableChatSha256": "c9bce5798c9a025b00dda57a418d1e4ecd9508cccd7788ef9c632e12e30f611f",
+  "stableVoiceSha256": "6f21868a79ed573bc8eafa736ebc0b8753ab16a9302222de26b8eaf77b9b8280"
+}
