@@ -46,8 +46,11 @@ Neon Postgres, region AWS US West (Oregon), `aws-us-west-2`, accessed through `p
 * Free plan, no credit card required, permanent (not a trial).
 * 0.5 GB storage per project, 100 compute-hours per month, compute scales to zero after 5 minutes idle and restarts in a few hundred milliseconds. (Neon's pricing page showed 1 GB per project during D1 research and a Neon FAQ said 0.5 GB. This plan uses the lower figure. Either is far more than needed.)
 * Connection strings live only in `.env` (local, gitignored) and Render's environment settings. Never in the repo.
-* Use a `dev` branch in Neon for local work and the main branch for production.
+* Neon's default branch is named "production". Local work and tests use the "dev" branch, and Render gets the "production" branch's connection string at deploy.
 * Nothing may poll the database. Frequent queries would keep the compute awake and burn through the 100 free compute-hours.
+* Neon's docs say a compute does not suspend while it has active connections, and do not say whether a plain idle connection counts. So `db.js` never holds one open: a pool of at most 2 connections whose idle connections close 1 second after use. Measured in D2: the connection closed about 1.06 seconds after the query finished.
+* SSL is always on with certificate verification, whatever the connection string's `sslmode` says. The pooled connection string goes through PgBouncer in transaction mode, so `db.js` uses only plain parameterized queries (no `SET`, no session state) and does not set `statement_timeout`, which the pooler rejects as a startup parameter.
+* The connection string, and its user, password and host, are never logged. Every database error is redacted before it can reach a log.
 
 Why not the others:
 
@@ -55,7 +58,7 @@ Why not the others:
 * Supabase: free projects pause after 1 week of inactivity, and unpausing is manual. Stock state would silently go stale.
 * Turso: viable, but SQLite rather than Postgres, and whether free databases are still archived after inactivity could not be confirmed.
 
-## Schema and seed
+## Schema and table creation
 
 One table, stock only. `menu.json` stays the source of menu content, in git.
 
@@ -63,11 +66,11 @@ One table, stock only. `menu.json` stays the source of menu content, in git.
 |---|---|---|
 | `item_name` | text, primary key | Exactly the item's `name` in `menu.json` |
 | `in_stock` | boolean, not null, default true | |
-| `updated_at` | timestamptz | The only change record in v1 |
+| `updated_at` | timestamptz, not null, default now() | The only change record in v1 |
 
-* The seed script inserts one row per `menu.json` item with `in_stock = true`, insert-if-missing only, so it is idempotent and never overwrites a toggle.
-* It reports orphans: names in the table that are no longer in `menu.json` (for example after a rename).
-* At runtime, a name missing from the table counts as in stock, so an empty table behaves exactly like today. Orphan rows are ignored and logged.
+* There is no seed step and no script to run against production. On boot, `db.js` runs `db/schema.sql` (`CREATE TABLE IF NOT EXISTS`, safe to repeat), and `setStock` is an upsert, so the first toggle of an item creates its row. A `deleteStock` function removes a row, which puts the item back to the default.
+* Boot logs orphans: rows whose names are no longer in `menu.json` (for example after a rename). They are ignored.
+* At runtime, a name missing from the table counts as in stock, so an empty table behaves exactly like today.
 * `menu.json` itself is unchanged. The cached prompt block and `/api/menu` still come from it, so both stay byte-identical by construction.
 * Later item and price editing can add a full `menu_items` table keyed by the same `item_name`, with `menu.json` becoming the seed.
 
@@ -76,7 +79,7 @@ One table, stock only. `menu.json` stays the source of menu content, in git.
 ### In memory
 
 * At boot, stock rows load into an in-memory Map, with a 3 second timeout, before the server starts listening.
-* One extra reload runs shortly after boot to cover the Render deploy overlap window, when the old instance can still accept a toggle after the new one has loaded.
+* One extra reload runs about 60 seconds after boot to cover the Render deploy overlap window, when the old instance can still accept a toggle after the new one has loaded. It is skipped while boot retries are still running, and after a permanent error such as a wrong password.
 * An admin toggle writes the database first, then updates the Map.
 * Every tool check is a memory lookup. No database call on the chat or voice path.
 
@@ -103,7 +106,7 @@ One short sentence plus up to two alternatives, for example: "Sorry, the blueber
 ## Failure behavior (Option A)
 
 * After a successful load, the in-memory state is used indefinitely. The database only matters again at the next toggle.
-* If the boot load fails, the server retries in the background with backoff, treats everything as in stock (today's behavior), logs loudly, and the dashboard shows a banner.
+* If the boot load fails or takes longer than 3 seconds, the server starts anyway, treats everything as in stock (today's behavior), logs loudly, and retries in the background: 5 seconds, doubling up to a 15 minute cap, stopping on the first success. A permanent error (wrong password, no such database, no permission, no `DATABASE_URL`) turns retries off, since retrying would only wake the database for nothing. Once the dashboard exists it shows a banner while stock is unavailable.
 * A toggle while the database is down returns an error and leaves memory unchanged.
 * Tradeoff accepted: during an outage that overlaps a restart, a sold-out item could be ordered.
 
@@ -122,7 +125,7 @@ One short sentence plus up to two alternatives, for example: "Sorry, the blueber
 
 | | Scope | Files likely touched | Tests | Rollback | Model |
 |---|---|---|---|---|---|
-| D2 | `db.js` (all database access), stock table, idempotent seed script with orphan report, boot load into the in-memory Map (3 second timeout), one extra reload shortly after boot | new `db.js`, `db/schema.sql`, `scripts/seed-stock.js`; `server.js` (boot only); `package.json` (`pg`); `.env.example` | Seed is idempotent and reports orphans; server boots with `DATABASE_URL` unset or wrong; existing 14/14 hours tests pass; `/api/menu` bytes match a snapshot | Revert the PR, or unset `DATABASE_URL` | Sonnet |
+| D2 | `db.js` (all database access), stock table created on boot (no seed script), in-memory stock module, boot load into the Map (3 second timeout) with background retries, one extra reload about 60 seconds after boot, orphan report in the boot log | new `db.js`, `stock.js`, `db/schema.sql`, `test/stock.test.js`; `server.js` (boot and test exports only); `package.json` (`pg`); `.env.example` | `/api/menu` bytes and both stable prompt blocks match a snapshot; server boots with `DATABASE_URL` unset, wrong, unreachable, and slow; timeout, retry and reload paths; secrets never logged; SSL always on; round trip and orphan detection on the dev branch; existing 14/14 hours tests pass | Revert the PR, or unset `DATABASE_URL` | Sonnet |
 | D3 | Server-side enforcement in `add_to_cart`, `confirm_order`, `view_cart`; Currently Unavailable line in the uncached block; one-time rule in both system prompts | `server.js`, `system-prompt.md`, `system-prompt-voice.md`, new test file | Unit tests with stubbed stock; toggling stock never changes a confirmed order; stable block hash unchanged when stock flips; uncached block lists sold-out items; H5 harness rerun at zero spend, including the voice refusal; a few real chat and voice checks | Revert the PR | Sonnet |
 | D4 | Admin auth: login and logout, separate session, CSRF, login rate limiting and lockout, hash script, env var startup rules | new `admin.js` router, `admin/login.html`, `scripts/hash-admin-password.js`; `server.js`; `.env.example` | Both env vars unset gives 404; one set or a weak secret refuses to start; wrong password; rate limit; lockout; missing or bad CSRF token gives 403; cookie flags; customer cookie can't reach admin; noindex header; session id changes at login | Revert, or unset both env vars | Opus |
 | D5 | Stock dashboard toggle; `POST /admin/api/stock` writes the database, then memory | `admin/dashboard.html`, `admin/dashboard.js`, `admin.js`, `db.js` | Toggle survives a restart; unknown name or non-boolean gives 400; database down gives 503 with memory unchanged; bot reflects the change on its next turn | Revert; stock rows stay valid | Sonnet |
@@ -133,8 +136,8 @@ One short sentence plus up to two alternatives, for example: "Sorry, the blueber
 
 Nmajeed does these. Claude creates no accounts.
 
-1. Before D2: create a Neon account, a project in AWS US West (Oregon), and a `dev` branch. Copy the pooled connection strings into `.env` locally.
-2. At the D2 deploy: set `DATABASE_URL` in Render (production branch string) and run the seed once.
+1. Before D2: create a Neon account, a project in AWS US West (Oregon), and a `dev` branch next to the default "production" branch. Put the `dev` branch's pooled connection string in `.env` locally.
+2. At the D2 deploy: set `DATABASE_URL` in Render to the "production" branch's pooled connection string. Nothing else to run: the table creates itself on the first boot.
 3. At the D4 deploy: set `ADMIN_PASSWORD_HASH` and `ADMIN_SESSION_SECRET` in Render.
 
 ## Findings from D1 checks
@@ -145,8 +148,8 @@ Nmajeed does these. Claude creates no accounts.
 ## Risks
 
 * Neon compute-hours: exhausting the 100 free hours suspends the database. Under Option A that means fail open, but no feature may poll.
-* Free plan terms can change. All access is in `db.js` and uses plain Postgres, so moving vendors means a new connection string plus a re-seed.
-* Name drift: renaming an item in `menu.json` orphans its stock row and the new name counts as in stock. The seed's orphan report catches it, and renames need a re-seed.
+* Free plan terms can change. All access is in `db.js` and uses plain Postgres, so moving vendors means a new connection string. The table creates itself, and only the sold-out toggles would need setting again.
+* Name drift: renaming an item in `menu.json` orphans its stock row and the new name counts as in stock. The orphan report in the boot log catches it, and the item has to be toggled again under its new name.
 * Price snapshot: cart lines store the price at add time while deals read the live menu price. Harmless today, but it matters once price editing exists.
 * More than one Render instance would make the in-memory state inconsistent. Only relevant if the app moves off the free plan.
 * Admin sessions live in memory, so a restart means logging in again. Acceptable for v1.
@@ -161,6 +164,14 @@ Nmajeed does these. Claude creates no accounts.
 ## Known issues
 
 * `CLAUDE.md` tells Claude Code to use a `/browse` skill for all web browsing, but that skill does not exist in this environment. D1 vendor research used web fetch and web search instead.
+* App-created worktrees conflict with the primary-folder rule. [project-instructions.md](project-instructions.md) says to work in the project folder and never use worktrees, but the Claude desktop app creates a worktree for each session (D2 ran in `.claude/worktrees/sweet-heyrovsky-9221b2`). Git allows a branch in only one checkout at a time, so a branch created in a session worktree is stuck there until the worktree is detached. Workaround used for D2: commit in the worktree, detach it with `git switch --detach`, then check the branch out in the primary folder. Still to decide: whether to stop the app from creating worktrees, or to relax the rule.
+* Stale worktree: `.claude/worktrees/cafebot-session-complete-d9abda` (created 2026-09-24, detached at `fbc7d16`) is still registered and has not been reviewed or removed. Leave it alone until someone checks it for anything unmerged.
+* `npm audit --omit=dev` (run during D2) reports 6 vulnerabilities in existing production dependencies, none of them from `pg`. Not triaged or fixed, and not touched by D2. Triage them in the D7 security pass.
+  * `proxy-addr` (critical): IP spoofing via an IPv4-mapped IPv6 trust subnet, brought in by `express`. This app sets `trust proxy` to a hop count of 1 rather than a subnet list, so it may not apply, but that is unconfirmed.
+  * `axios` (high): prototype pollution gadgets, brought in by `twilio`.
+  * `qs` (moderate): array-limit bypass and a denial of service, brought in by `express` and `body-parser`. `express` and `body-parser` are flagged because of it.
+  * `ip-address` (moderate): address-family comparison flaw, brought in by `express-rate-limit`.
+  * `npm audit` says a fix is available for all of them.
 
 ## Sources (checked during D1)
 

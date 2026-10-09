@@ -54,6 +54,8 @@ const twilio = require('twilio');
 const VoiceResponse = twilio.twiml.VoiceResponse;
 const { speak, verifyDynamicToken, DYNAMIC_DIR, ELEVENLABS_TIMEOUT_MS } = require('./elevenlabs-tts');
 const { saveInProgressOrder, clearInProgressOrder, findResumableOrder } = require('./voice-order-recovery');
+const stock = require('./stock');
+const db = require('./db');
 
 const menu = JSON.parse(fs.readFileSync(path.join(__dirname, 'menu.json'), 'utf8'));
 const deals = JSON.parse(fs.readFileSync(path.join(__dirname, 'deals.json'), 'utf8'));
@@ -1684,16 +1686,44 @@ app.post('/reset', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+// D2: fills the in-memory stock state (see stock.js) before the server starts listening, so
+// the first request already sees it. This can never stop the server from starting: with no
+// DATABASE_URL, or a database that is down, slow or misconfigured, it logs loudly and the
+// server starts anyway with every item treated as in stock. Nothing reads the stock state
+// yet (that is D3), so for now this has no effect on customers.
+async function bootStock() {
+  if (!process.env.DATABASE_URL) {
+    console.warn('[stock] DATABASE_URL is not set: stock tracking is OFF and every item counts as in stock.');
+    return;
+  }
+  try {
+    await stock.initStock({ menuNames: menu.map((item) => item.name), loadFn: db.loadStock });
+  } catch (err) {
+    console.error('[stock] unexpected error during stock boot, continuing with every item in stock:', err && err.message);
+  }
+}
+
 // Guarded so this file can be `require`d (see test/hours.test.js) without opening a
-// port — only true when server.js is the process entry point (`node server.js`),
-// exactly how it's already started in dev and in production.
+// port or touching the database. It is only true when server.js is the process entry
+// point (`node server.js`), exactly how it's already started in dev and in production.
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`2try1t CafeBot listening on http://localhost:${PORT}`);
+  bootStock().then(() => {
+    app.listen(PORT, () => {
+      console.log(`2try1t CafeBot listening on http://localhost:${PORT}`);
+    });
   });
 }
 
-// Exported for tests only (the hours/timezone unit tests, and the H5 voice harness, which
-// inspects voiceSessions and drives the idle sweep) — nothing about how the app runs
-// depends on this export existing.
-module.exports = { getCafeNow, validateOrderTiming, buildSystemBlocks, voiceSessions, sweepIdleVoiceSessions };
+// Exported for tests only (the hours/timezone unit tests, the H5 voice harness, which
+// inspects voiceSessions and drives the idle sweep, and the D2 snapshot test, which hashes
+// the two stable system blocks). Nothing about how the app runs depends on these exports.
+module.exports = {
+  getCafeNow,
+  validateOrderTiming,
+  buildSystemBlocks,
+  voiceSessions,
+  sweepIdleVoiceSessions,
+  STABLE_SYSTEM_TEXT,
+  STABLE_SYSTEM_TEXT_VOICE
+};
