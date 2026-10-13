@@ -1,11 +1,11 @@
 {
-  "note": "Captured from main before D2 (unmodified server). Prompt hashes are over LF-normalised text.",
+  "note": "apiMenu captured from main before D2 (unmodified server). Stable prompt hashes updated on purpose in D3 for the Sold-Out Items rule in both prompts; they must not change when stock flips. Prompt hashes are over LF-normalised text.",
   "apiMenu": {
     "status": 200,
     "contentType": "application/json; charset=utf-8",
     "bytes": 4018,
     "sha256": "42b129c49636a2fb6f1fd63e66e8fa66bde3ac8a14280629ddc9e073b198428e"
   },
-  "stableChatSha256": "c9bce5798c9a025b00dda57a418d1e4ecd9508cccd7788ef9c632e12e30f611f",
-  "stableVoiceSha256": "6f21868a79ed573bc8eafa736ebc0b8753ab16a9302222de26b8eaf77b9b8280"
+  "stableChatSha256": "ab1e59148a610ca2782de4affba192c43c04c2bb1013853c3057a547b7a84498",
+  "stableVoiceSha256": "0e96a18e58cf2bad9fed499d86bc59dab3aff4cc465a8055c051997c9ef19f2c"
 }
