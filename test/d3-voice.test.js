@@ -343,6 +343,36 @@ test('D3: with stock unknown (empty), voice ordering works exactly as before', a
   }
 });
 
+test('D3 follow-up: nothing sold out, the caller asks for the muffin and it goes in', async () => {
+  // The live bug: with 0 stock rows loaded, the voice bot said the blueberry muffin was
+  // sold out. The server side must give the model no reason to: no Currently Unavailable
+  // section in any request of the turn, and add_to_cart succeeds.
+  const server = await startServer({ soldOut: [] });
+  try {
+    const from = testNumber();
+    const call = new Call(server, from);
+    await call.incoming();
+    const mark = fake.requests.length;
+    const reply = await call.say(ADD('Blueberry Muffin'));
+    const turn = fake.requests.slice(mark);
+    assert.equal(turn.length, 2); // the tool call round and the reply round
+    for (const request of turn) {
+      assert.equal(sha256(request.body.system[0].text), fixture.stableVoiceSha256);
+      assert.ok(!request.body.system[1].text.includes('Currently Unavailable'));
+    }
+    const result = lastToolResult();
+    assert.equal(result.success, true);
+    assert.equal(result.added.name, 'Blueberry Muffin');
+    assert.ok(!('error' in result));
+    assert.ok(!('unavailableItems' in result));
+    assert.doesNotMatch(reply, /sold out/i);
+    const saved = JSON.parse(fs.readFileSync(orderFile(from), 'utf8'));
+    assert.deepEqual(saved.cart.map((line) => line.name), ['Blueberry Muffin']);
+  } finally {
+    server.stop();
+  }
+});
+
 // ------------------------------------------------------------------------------------
 // H5 rerun
 // ------------------------------------------------------------------------------------
