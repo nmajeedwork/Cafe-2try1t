@@ -186,6 +186,49 @@ function findMenuItem(itemName) {
   return menu.find((item) => item.name.toLowerCase() === String(itemName || '').toLowerCase());
 }
 
+// --- D3: stock enforcement (see docs/inventory-plan.md) ------------------------------
+// Every check below is a memory lookup in stock.js. Nothing here is async and nothing
+// touches the database, so the chat and voice paths never wait on it. When stock state
+// is unknown (no DATABASE_URL, or the database was down at boot) the Map is empty and
+// everything counts as in stock, exactly as before D3.
+
+// The stock Map is keyed by the exact menu.json name, so a cart line is always checked
+// under its canonical menu name, never the customer's wording. A line whose name is no
+// longer on the menu keeps its own name, which stock.js counts as in stock.
+function canonicalName(name) {
+  const menuItem = findMenuItem(name);
+  return menuItem ? menuItem.name : name;
+}
+
+// Sold-out names in menu order, so the uncached prompt line is the same for the same
+// stock state no matter what order the database returned its rows in.
+function currentlyUnavailable() {
+  const out = new Set(stock.outOfStockNames());
+  return menu.filter((item) => out.has(item.name)).map((item) => item.name);
+}
+
+// The distinct sold-out items in a cart, by canonical name, in menu order.
+function soldOutInCart(cart) {
+  const inCart = new Set(cart.map((line) => canonicalName(line.name)));
+  return currentlyUnavailable().filter((name) => inCart.has(name));
+}
+
+// Up to two in-stock items from the same category, in menu order. Empty when the
+// category has nothing else in stock.
+function inStockAlternatives(menuItem) {
+  return menu
+    .filter((item) => item.category === menuItem.category && item.name !== menuItem.name && stock.isInStock(item.name))
+    .slice(0, 2)
+    .map((item) => item.name);
+}
+
+// Adds unavailableItems to a cart tool's result only when the cart holds a sold-out
+// item, so the result is byte-for-byte what it was before D3 whenever nothing is.
+function withUnavailableItems(result, cart) {
+  const unavailableItems = soldOutInCart(cart);
+  return unavailableItems.length ? { ...result, unavailableItems } : result;
+}
+
 function cartSummary(cart) {
   const items = cart.map((item) => ({
     name: item.name,
@@ -280,6 +323,12 @@ function addToCart(cart, input) {
     return { error: `"${input.item_name}" is not on the menu.` };
   }
 
+  // D3: refused at the tool level, whatever the prompt says. There is no separate
+  // quantity tool, so this also covers "make it two" (a new line or a remove and re-add).
+  if (!stock.isInStock(menuItem.name)) {
+    return { error: `${menuItem.name} is sold out right now.`, alternatives: inStockAlternatives(menuItem) };
+  }
+
   if (input.size && menuItem.sizes.length && !menuItem.sizes.some((s) => s.toLowerCase() === input.size.toLowerCase())) {
     return {
       error: `"${input.size}" is not an available size for ${menuItem.name}. Available sizes: ${menuItem.sizes.join(', ')}`
@@ -315,17 +364,25 @@ function removeFromCart(cart, input) {
   return { success: true, cart: cartSummary(cart), promotions: checkPromotions(cart) };
 }
 
-function viewCart(cart) {
-  return { ...cartSummary(cart), promotions: checkPromotions(cart) };
+// D3: a confirmed order is frozen, so a later stock toggle must not change what it
+// reports. The sold-out check only runs while the order is still open.
+function viewCart(cart, order) {
+  const result = { ...cartSummary(cart), promotions: checkPromotions(cart) };
+  return order && order.confirmed ? result : withUnavailableItems(result, cart);
 }
 
+// D3: still allowed on a sold-out line, so the customer can fix their cart, but the
+// result says the line still cannot be ordered.
 function updateCustomization(cart, input) {
   const item = cart.find((i) => i.name.toLowerCase() === String(input.item_name || '').toLowerCase());
   if (!item) {
     return { error: `"${input.item_name}" is not in the cart.` };
   }
   item.customizations = input.customizations || [];
-  return { success: true, updated: item, cart: cartSummary(cart), promotions: checkPromotions(cart) };
+  return withUnavailableItems(
+    { success: true, updated: item, cart: cartSummary(cart), promotions: checkPromotions(cart) },
+    cart
+  );
 }
 
 function getHoursForDay(dayOfWeek) {
@@ -551,6 +608,16 @@ function confirmOrder(session) {
   if (session.cart.length === 0) {
     return { error: 'The cart is empty — add at least one item before confirming.' };
   }
+  // D3: the hard guarantee. Every line is re-checked by its canonical menu name, which
+  // also covers items that went out mid-order and carts restored from a dropped voice
+  // call. Nothing is removed: the customer decides whether to remove or swap.
+  const soldOutItems = soldOutInCart(session.cart);
+  if (soldOutItems.length) {
+    return {
+      error: `Can't confirm: these items are sold out right now: ${soldOutItems.join(', ')}. Ask the customer to remove or swap them.`,
+      soldOutItems
+    };
+  }
   if (session.order.type !== 'pickup' && session.order.type !== 'delivery') {
     return { error: 'Order type (pickup or delivery) must be set before confirming.' };
   }
@@ -596,7 +663,7 @@ function executeTool(toolName, input, session) {
     case 'remove_from_cart':
       return removeFromCart(session.cart, input);
     case 'view_cart':
-      return viewCart(session.cart);
+      return viewCart(session.cart, session.order);
     case 'update_customization':
       return updateCustomization(session.cart, input);
     case 'set_order_type':
@@ -642,6 +709,13 @@ function buildSystemBlocks(stableText, { resumedOrder = false } = {}, instant = 
   // it has no way to know the greeting happened or that the cart isn't actually empty.
   if (resumedOrder) {
     timeText += `\n\n**Resumed call:** This caller just heard a greeting saying their order from a dropped call was restored. The cart and order tools already reflect that saved state right now — call \`view_cart\` before responding to their first message so you can speak to what's actually there, instead of assuming the cart is empty.`;
+  }
+
+  // D3: live stock lives here, after the cache breakpoint, so the stable block above
+  // stays byte-identical when stock flips. Present only when something is sold out.
+  const unavailable = currentlyUnavailable();
+  if (unavailable.length) {
+    timeText += `\n\n## Currently Unavailable\nSold out right now, cannot be ordered: ${unavailable.join(', ')}.`;
   }
 
   return [
@@ -1690,8 +1764,8 @@ const PORT = process.env.PORT || 3000;
 // D2: fills the in-memory stock state (see stock.js) before the server starts listening, so
 // the first request already sees it. This can never stop the server from starting: with no
 // DATABASE_URL, or a database that is down, slow or misconfigured, it logs loudly and the
-// server starts anyway with every item treated as in stock. Nothing reads the stock state
-// yet (that is D3), so for now this has no effect on customers.
+// server starts anyway with every item treated as in stock. D3's cart tools and the
+// Currently Unavailable prompt line read this state from memory.
 async function bootStock() {
   if (!process.env.DATABASE_URL) {
     console.warn('[stock] DATABASE_URL is not set: stock tracking is OFF and every item counts as in stock.');
@@ -1717,11 +1791,14 @@ if (require.main === module) {
 
 // Exported for tests only (the hours/timezone unit tests, the H5 voice harness, which
 // inspects voiceSessions and drives the idle sweep, and the D2 snapshot test, which hashes
-// the two stable system blocks). Nothing about how the app runs depends on these exports.
+// the two stable system blocks, and the D3 stock tests, which drive the cart tools
+// directly). Nothing about how the app runs depends on these exports.
 module.exports = {
   getCafeNow,
   validateOrderTiming,
   buildSystemBlocks,
+  executeTool,
+  initSessionState,
   voiceSessions,
   sweepIdleVoiceSessions,
   STABLE_SYSTEM_TEXT,

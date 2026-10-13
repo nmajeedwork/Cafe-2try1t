@@ -10,7 +10,8 @@
 // (no database configured, the database down at boot, nothing ever toggled) therefore
 // behaves exactly like the café had no inventory tracking at all.
 //
-// D2 only builds and fills this state. Nothing consults isInStock() until D3.
+// D3 reads it on the chat and voice path through isInStock() and outOfStockNames(), both
+// plain memory reads.
 
 const DEFAULT_TIMING = {
   // The boot load is allowed this long before the server starts without it. Render's own
@@ -33,6 +34,12 @@ let stockMap = new Map();
 function isInStock(itemName) {
   const state = stockMap.get(itemName);
   return state === undefined ? true : state;
+}
+
+// The names currently marked out of stock, read straight from the Map. Read-only, no
+// database. Order follows the Map, so callers that need a stable order sort it themselves.
+function outOfStockNames() {
+  return [...stockMap].filter(([, inStock]) => !inStock).map(([name]) => name);
 }
 
 // Replaces the whole Map in one swap, so a reader never sees a half-filled one. Rows for
@@ -229,4 +236,4 @@ async function initStock({ menuNames, loadFn, log = console, timing = {} }) {
   return { ok: boot.ok };
 }
 
-module.exports = { isInStock, initStock, stopStock };
+module.exports = { isInStock, outOfStockNames, initStock, stopStock };
