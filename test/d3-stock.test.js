@@ -283,3 +283,17 @@ test('the sold-out rule is in both prompts and adds no em or en dashes', () => {
     assert.ok(!/[\u2013\u2014]/.test(section), file);
   }
 });
+
+// D3 follow-up: a live call with nothing sold out said the blueberry muffin was sold out,
+// because the voice prompt's example sentence named real items and the model took it as
+// fact. The Sold-Out Items sections must only use placeholders, never menu item names.
+test('the Sold-Out Items section of either prompt names no menu item', () => {
+  for (const file of ['system-prompt.md', 'system-prompt-voice.md']) {
+    const text = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+    const start = text.indexOf('## Sold-Out Items');
+    assert.ok(start > 0, file);
+    const section = text.slice(start, text.indexOf('\n## ', start + 1)).toLowerCase();
+    const named = MENU_NAMES.filter((name) => section.includes(name.toLowerCase()));
+    assert.deepEqual(named, [], `${file} names menu items in its Sold-Out Items section`);
+  }
+});
