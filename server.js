@@ -44,6 +44,17 @@ if (!IS_DEV && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET === 'd
   process.exit(1);
 }
 
+// --- D4: admin login startup rules (see admin.js) ---------------------------------------
+// ADMIN_PASSWORD_HASH and ADMIN_SESSION_SECRET both unset: admin is off and every /admin
+// path is an ordinary 404. Only one set, a malformed hash, or a weak secret: refuse to start,
+// in every environment. Same pattern as the guards above, before app.listen.
+const { loadAdminConfig, createAdminRouter, isAdminPath } = require('./admin');
+const adminConfig = loadAdminConfig(process.env);
+if (adminConfig.error) {
+  console.error(`FATAL: ${adminConfig.error} Refusing to start.`);
+  process.exit(1);
+}
+
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -965,7 +976,7 @@ app.set('trust proxy', 1);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded params
-app.use(
+const customerSession =
   session({
     secret: process.env.SESSION_SECRET || 'dev-secret',
     resave: false,
@@ -983,8 +994,15 @@ app.use(
       // signature-authenticated, not cookie-based. 'lax' is the correct default.
       sameSite: 'lax'
     }
-  })
-);
+  });
+// D4: the customer session never runs under /admin, so a customer cookie grants nothing
+// there. The admin router has its own session (admin.js), mounted before express.static.
+app.use((req, res, next) => (isAdminPath(req.path) ? next() : customerSession(req, res, next)));
+if (adminConfig.enabled) {
+  app.use('/admin', createAdminRouter(adminConfig, { isDev: IS_DEV }));
+} else {
+  console.log('[admin] ADMIN_PASSWORD_HASH and ADMIN_SESSION_SECRET are not set: admin is off.');
+}
 // --- H4 hardening: signed, expiring URLs for per-call TTS audio ------------------
 // public/audio/dynamic/ holds CafeBot's freshly generated spoken replies, which can
 // contain caller PII (name, delivery address, order details). They used to be served
