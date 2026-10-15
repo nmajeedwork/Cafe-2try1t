@@ -226,7 +226,7 @@ const ADMIN_HEADERS = {
   'x-robots-tag': 'noindex, nofollow',
   'cache-control': 'no-store',
   'x-frame-options': 'DENY',
-  'referrer-policy': 'no-referrer'
+  'referrer-policy': 'same-origin'
 };
 
 function assertAdminHeaders(res, label) {
@@ -476,6 +476,42 @@ test('Origin: missing, foreign, null or wrong-scheme Origin gives 403', async ()
   const res = await b.post('/admin/logout', { form: { _csrf: logoutToken }, headers: { origin: 'https://evil.example' } });
   assert.equal(res.status, 403);
   assert.equal((await b.get('/admin')).status, 200);
+});
+
+// The Origin a browser puts on a same-origin form POST, by the page's Referrer-Policy.
+// A model of the Fetch spec step "append a request Origin header" for this one case (not a
+// real browser): no-referrer turns the Origin into "null" for any POST; same-origin and the
+// other policies keep it for a same-origin, same-scheme request.
+function browserOriginForSameOriginPost(referrerPolicy, pageOrigin) {
+  return referrerPolicy === 'no-referrer' ? 'null' : pageOrigin;
+}
+
+test('Referrer-Policy is same-origin on admin responses, so browsers keep the real Origin on login', async () => {
+  const b = new Browser(main, { ip: '203.0.113.49' });
+  const page = await b.get('/admin/login');
+  const policy = page.headers.get('referrer-policy');
+  assert.notEqual(policy, 'no-referrer', 'no-referrer makes browsers send Origin: null on form POSTs');
+  assert.equal(policy, 'same-origin');
+  for (const p of ['/admin', '/admin/nope']) {
+    assert.equal((await b.get(p)).headers.get('referrer-policy'), 'same-origin', p);
+  }
+
+  // Post the login the way a browser would under this page's policy: it must succeed.
+  const token = page.text.match(/name="_csrf" value="([^"]+)"/)[1];
+  seenSecrets.add(token);
+  const origin = browserOriginForSameOriginPost(policy, b.origin);
+  const res = await b.post('/admin/login', { form: { _csrf: token, password: TEST_PASSWORD }, headers: { origin } });
+  assert.equal(res.status, 303, 'login works with the Origin a browser would send');
+
+  // And the old policy really did break it: Origin null is refused.
+  const old = new Browser(main, { ip: '203.0.113.50' });
+  const oldToken = await old.loginForm();
+  const nullOrigin = browserOriginForSameOriginPost('no-referrer', old.origin);
+  const refused = await old.post('/admin/login', {
+    form: { _csrf: oldToken, password: TEST_PASSWORD },
+    headers: { origin: nullOrigin }
+  });
+  assert.equal(refused.status, 403);
 });
 
 test('session id changes at login, and the old id stops working', async () => {

@@ -145,7 +145,11 @@ const ADMIN_HEADERS = {
   'X-Frame-Options': 'DENY',
   'Content-Security-Policy':
     "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-  'Referrer-Policy': 'no-referrer'
+  // Not no-referrer: under that policy browsers send "Origin: null" on every form POST,
+  // even same-origin ones (Fetch spec, "append a request Origin header"), so the strict
+  // Origin check below would refuse every real login. same-origin keeps the real Origin on
+  // our own POSTs and still sends no Referer to other sites.
+  'Referrer-Policy': 'same-origin'
 };
 
 const randomToken = () => crypto.randomBytes(32).toString('base64url');
