@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Admin</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem; }
+  button { font-size: 1rem; padding: 0.5rem 1rem; }
+</style>
+</head>
+<body>
+<h1>Admin</h1>
+<p>You are logged in. Stock controls arrive in a later update.</p>
+<form method="post" action="/admin/logout">
+  <input type="hidden" name="_csrf" value="{{CSRF_TOKEN}}">
+  <button type="submit">Log out</button>
+</form>
+</body>
+</html>
