@@ -198,7 +198,7 @@ function createAdminRouter(config, { isDev = false, now = Date.now, log = consol
   const forbidden = (res) => plain(res, 403, 'Forbidden');
 
   // Origin must be present and match this server exactly. req.protocol comes from the one
-  // trusted proxy hop (trust proxy 1 in server.js).
+  // trusted proxy hop (any TRUST_PROXY_HOPS count, see server.js).
   function requireSameOrigin(req, res, next) {
     const origin = req.get('origin');
     if (!origin || origin !== `${req.protocol}://${req.get('host')}`) return forbidden(res);
@@ -237,7 +237,8 @@ function createAdminRouter(config, { isDev = false, now = Date.now, log = consol
 
   // Per IP: each attempt is counted before the password check, and a successful login
   // (status below 400) gives its hit back. So 5 wrong passwords in 15 minutes, then 429,
-  // even for the right password. req.ip relies on trust proxy 1 (see server.js).
+  // even for the right password. req.ip depends on TRUST_PROXY_HOPS matching the real
+  // proxy chain (see client-ip.js).
   const loginLimiter = rateLimit({
     windowMs: LOGIN_WINDOW_MS,
     limit: LOGIN_MAX_FAILURES,
