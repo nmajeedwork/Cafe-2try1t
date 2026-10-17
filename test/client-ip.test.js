@@ -1,4 +1,4 @@
-// Client IP hop count tests (TRUST_PROXY_HOPS, the mismatch guard, the temporary IP_DEBUG log).
+// Client IP hop count tests (TRUST_PROXY_HOPS and the mismatch guard).
 //
 // Run with:  node --test test/client-ip.test.js
 //
@@ -6,8 +6,8 @@
 // environment, a working directory with no .env, and test/fixtures/voice-preload.js, which
 // blocks every non-loopback request. /chat calls go to a fake Anthropic API on 127.0.0.1.
 // The test client stands in for the proxy chain by sending X-Forwarded-For itself. The
-// simulated Render chain is "client, Cloudflare, Render internal", as observed by others;
-// the real one is confirmed on Render with IP_DEBUG, not here.
+// simulated Render chain is "client, Cloudflare, Render internal", the chain confirmed on
+// Render.
 const test = require('node:test');
 const { before, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -75,25 +75,6 @@ test('TRUST_PROXY_HOPS: unset or empty is 1; 1 to 5 accepted; anything else is a
   }
 });
 
-test('addressForHops picks what Express would pick for each count', () => {
-  const req = { headers: { 'x-forwarded-for': renderChain('198.51.100.20', '203.0.113.66') }, socket: { remoteAddress: '::ffff:10.1.2.3' } };
-  const chain = clientIp.forwardedChain(req);
-  assert.deepEqual(chain, ['10.1.2.3', RENDER_HOP, CLOUDFLARE_HOP, '198.51.100.20', '203.0.113.66']);
-  assert.equal(clientIp.addressForHops(chain, 1), RENDER_HOP, '1 hop: a shared proxy address');
-  assert.equal(clientIp.addressForHops(chain, 3), '198.51.100.20', '3 hops: the real client');
-  assert.equal(clientIp.addressForHops(chain, 4), '203.0.113.66', '4 hops: the spoofed entry');
-  assert.equal(clientIp.addressForHops(chain, 9), '203.0.113.66', 'past the end: the farthest entry');
-});
-
-test('isPrivate classifies private, loopback, CGNAT and link-local addresses', () => {
-  for (const a of ['10.0.0.5', '172.16.0.1', '172.31.255.1', '192.168.1.1', '127.0.0.1', '100.64.0.1', '169.254.1.1', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1']) {
-    assert.equal(clientIp.isPrivate(a), true, a);
-  }
-  for (const a of ['172.71.0.9', '198.51.100.20', '8.8.8.8', '172.32.0.1', '2001:db8::1']) {
-    assert.equal(clientIp.isPrivate(a), false, a);
-  }
-});
-
 test('keyed hashes: stable within one key, different across keys, never the address', () => {
   const h1 = clientIp.createHasher();
   const h2 = clientIp.createHasher();
@@ -132,32 +113,6 @@ test('mismatch guard: warns at most every 15 minutes, only on a real mismatch, h
   t += 2 * 60 * 1000;
   run({ 'true-client-ip': '198.51.100.21' }, RENDER_HOP);
   assert.equal(lines.length, 2, 'again after 15 minutes');
-});
-
-test('IP_DEBUG logger: off by default; on, it logs hashes only and stops after 50 lines', () => {
-  const req = {
-    headers: { 'x-forwarded-for': renderChain('198.51.100.20', '203.0.113.66'), 'true-client-ip': '198.51.100.20' },
-    socket: { remoteAddress: '10.1.2.3' },
-    ip: RENDER_HOP
-  };
-  const off = captureLog();
-  clientIp.createIpDebugLogger({ enabled: false, hops: 1, log: off.log })(req, {}, () => {});
-  assert.equal(off.lines.length, 0);
-
-  const on = captureLog();
-  const hash = clientIp.createHasher();
-  const logger = clientIp.createIpDebugLogger({ enabled: true, hops: 1, log: on.log, hash });
-  for (let i = 0; i < 60; i += 1) logger(req, {}, () => {});
-  assert.equal(on.lines.length, 50, 'at most 50 lines');
-  const line = on.lines[0];
-  assert.match(line, /^\[ip-debug\] line=1\/50 hops_setting=1 xff_entries=4 kinds=public,public,public,private socket=private /);
-  assert.ok(line.includes(`hop1=${hash(RENDER_HOP)}`));
-  assert.ok(line.includes(`hop3=${hash('198.51.100.20')}`));
-  assert.ok(line.includes(`tci=${hash('198.51.100.20')}`));
-  assert.ok(line.includes('tci_matches_req_ip=false'));
-  for (const raw of ['198.51.100.20', '203.0.113.66', CLOUDFLARE_HOP, RENDER_HOP, '10.1.2.3']) {
-    assert.ok(!on.lines.join('\n').includes(raw), `raw address ${raw} must never be logged`);
-  }
 });
 
 // ------------------------------------------------------------------------------------
@@ -299,32 +254,31 @@ test('server, TRUST_PROXY_HOPS=3: the H1 /chat per-IP limit is per real client',
   }
 });
 
-test('server: mismatch guard and IP_DEBUG log hashes only, and IP_DEBUG is off by default', async () => {
-  const quiet = await startServer();
-  try {
-    await fetch(`${quiet.base}/admin/login`, { headers: { 'x-forwarded-for': renderChain('198.51.100.50') } });
-    assert.doesNotMatch(quiet.output(), /\[ip-debug\]/);
-  } finally {
-    quiet.stop();
-  }
+test('server: the mismatch guard logs hashes only, and is silent once the hop count matches', async () => {
+  const headers = { 'x-forwarded-for': renderChain('198.51.100.50', '203.0.113.77'), 'true-client-ip': '198.51.100.50' };
 
-  const server = await startServer({ env: { IP_DEBUG: 'true' } });
+  const wrong = await startServer();
   try {
-    const headers = { 'x-forwarded-for': renderChain('198.51.100.50', '203.0.113.77'), 'true-client-ip': '198.51.100.50' };
-    const res = await fetch(`${server.base}/admin/login`, { headers });
+    const res = await fetch(`${wrong.base}/admin/login`, { headers });
     assert.equal(res.status, 200, 'the login page is unaffected');
     await sleep(100);
-    const out = server.output();
-    assert.match(out, /\[ip-debug\] line=1\/50 hops_setting=1 xff_entries=4 kinds=public,public,public,private socket=private hop1=[0-9a-f]{8} hop2=[0-9a-f]{8} hop3=[0-9a-f]{8} hop4=[0-9a-f]{8} req_ip=[0-9a-f]{8} tci=[0-9a-f]{8} cfip=none tci_matches_req_ip=false/);
-    assert.match(out, /\[client-ip\] WARNING: req\.ip \([0-9a-f]{8}\) does not match/);
-    const debug = out.split('\n').find((l) => l.startsWith('[ip-debug]'));
-    const field = (name) => debug.match(new RegExp(`${name}=([0-9a-f]{8}|none)`))[1];
-    assert.equal(field('hop3'), field('tci'), 'with this chain, 3 hops is the client the edge reported');
-    assert.equal(field('hop1'), field('req_ip'), 'req.ip is the 1 hop choice under the default');
+    const out = wrong.output();
+    assert.match(out, /\[client-ip\] WARNING: req\.ip \([0-9a-f]{8}\) does not match .* \([0-9a-f]{8}\) with TRUST_PROXY_HOPS=1/);
     for (const raw of ['198.51.100.50', '203.0.113.77', CLOUDFLARE_HOP, RENDER_HOP, '127.0.0.1']) {
       assert.ok(!out.includes(raw), `raw address ${raw} must never be logged`);
     }
   } finally {
-    server.stop();
+    wrong.stop();
+  }
+
+  // IP_DEBUG was removed: setting it must not log anything extra.
+  const right = await startServer({ env: { TRUST_PROXY_HOPS: '3', IP_DEBUG: 'true' } });
+  try {
+    assert.equal((await fetch(`${right.base}/admin/login`, { headers })).status, 200);
+    await sleep(100);
+    assert.doesNotMatch(right.output(), /\[client-ip\] WARNING/, 'no warning when req.ip matches the edge');
+    assert.doesNotMatch(right.output(), /\[ip-debug\]/, 'the IP_DEBUG log is gone');
+  } finally {
+    right.stop();
   }
 });
