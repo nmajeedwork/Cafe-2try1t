@@ -980,22 +980,14 @@ const app = express();
 // A hop count, never true: "true" trusts the entire X-Forwarded-For chain, which lets any
 // client spoof req.ip by sending their own X-Forwarded-For header and defeat the per-IP
 // rate limiters. The count comes from TRUST_PROXY_HOPS (default 1, one hop: the ngrok edge
-// in dev). Render was observed to put more than one proxy in front of the app, so with 1
-// every visitor there shared one rate limit bucket; see client-ip.js. req.protocol only
+// in dev). Render puts three proxies in front of the app, so it runs with 3 there; with 1
+// every visitor shared one rate limit bucket. See client-ip.js. req.protocol only
 // asks whether the nearest hop is trusted, which is true for any count of 1 or more, so
 // Twilio validation, the admin Origin check and Secure cookies do not depend on the count.
 app.set('trust proxy', trustProxy.hops);
 console.log(`[client-ip] trust proxy hops: ${trustProxy.hops}`);
 
-// Shared hash key, so the guard's and the debug log's hashes can be compared within a boot.
-const hashIp = clientIp.createHasher();
-app.use(clientIp.createMismatchGuard({ hops: trustProxy.hops, hash: hashIp }));
-// TEMPORARY: IP_DEBUG=true logs the forwarded chain shape on GET /admin/login (hashes only,
-// at most 50 lines per boot). Remove once the real hop count on Render is confirmed.
-app.get(
-  '/admin/login',
-  clientIp.createIpDebugLogger({ enabled: process.env.IP_DEBUG === 'true', hops: trustProxy.hops, hash: hashIp })
-);
+app.use(clientIp.createMismatchGuard({ hops: trustProxy.hops }));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded params
