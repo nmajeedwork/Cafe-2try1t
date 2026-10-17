@@ -55,6 +55,16 @@ if (adminConfig.error) {
   process.exit(1);
 }
 
+// --- Client IP hop count (see client-ip.js) ---------------------------------------------
+// TRUST_PROXY_HOPS: how many proxies sit between the client and this app. Unset means 1,
+// the original setting. Anything but a whole number from 1 to 5 refuses to start.
+const clientIp = require('./client-ip');
+const trustProxy = clientIp.parseTrustProxyHops(process.env);
+if (trustProxy.error) {
+  console.error(`FATAL: ${trustProxy.error} Refusing to start.`);
+  process.exit(1);
+}
+
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -967,12 +977,25 @@ const app = express();
 // req.protocol reports "http" even for https requests, which breaks Twilio signature
 // validation below (the signature is computed against the https:// URL Twilio actually called).
 //
-// Set to 1, not true: trust exactly one proxy hop (the ngrok edge in dev, the single load
-// balancer in prod). "true" trusts the entire X-Forwarded-For chain, which lets any client
-// spoof req.ip by sending their own X-Forwarded-For header and defeat the per-IP rate
-// limiter below. With 1, req.ip is the real client address and req.protocol still resolves
-// from the one trusted hop's X-Forwarded-Proto, so Twilio validation is unaffected.
-app.set('trust proxy', 1);
+// A hop count, never true: "true" trusts the entire X-Forwarded-For chain, which lets any
+// client spoof req.ip by sending their own X-Forwarded-For header and defeat the per-IP
+// rate limiters. The count comes from TRUST_PROXY_HOPS (default 1, one hop: the ngrok edge
+// in dev). Render was observed to put more than one proxy in front of the app, so with 1
+// every visitor there shared one rate limit bucket; see client-ip.js. req.protocol only
+// asks whether the nearest hop is trusted, which is true for any count of 1 or more, so
+// Twilio validation, the admin Origin check and Secure cookies do not depend on the count.
+app.set('trust proxy', trustProxy.hops);
+console.log(`[client-ip] trust proxy hops: ${trustProxy.hops}`);
+
+// Shared hash key, so the guard's and the debug log's hashes can be compared within a boot.
+const hashIp = clientIp.createHasher();
+app.use(clientIp.createMismatchGuard({ hops: trustProxy.hops, hash: hashIp }));
+// TEMPORARY: IP_DEBUG=true logs the forwarded chain shape on GET /admin/login (hashes only,
+// at most 50 lines per boot). Remove once the real hop count on Render is confirmed.
+app.get(
+  '/admin/login',
+  clientIp.createIpDebugLogger({ enabled: process.env.IP_DEBUG === 'true', hops: trustProxy.hops, hash: hashIp })
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded params
