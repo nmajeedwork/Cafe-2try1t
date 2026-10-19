@@ -359,7 +359,7 @@ test('login page: admin headers, admin.pre cookie flags, nothing indexed or cach
   }
 });
 
-test('right password: 303 to /admin, session cookie flags, 8 hour Expires, placeholder page', async () => {
+test('right password: 303 to /admin, session cookie flags, 8 hour Expires, stock page', async () => {
   const b = new Browser(main, { ip: '203.0.113.21' });
   const before = Date.now();
   const res = await b.login();
@@ -377,11 +377,11 @@ test('right password: 303 to /admin, session cookie flags, 8 hour Expires, place
   const eight = 8 * 60 * 60 * 1000;
   assert.ok(Math.abs(expires - (before + eight)) < 60 * 1000, 'Expires is 8 hours after login');
 
-  const home = await b.get('/admin');
+  const home = await b.get('/admin/stock');
   assert.equal(home.status, 200);
-  assert.match(home.text, /You are logged in/);
+  assert.match(home.text, /<h1>Stock<\/h1>/);
   assertAdminHeaders(home, 'GET /admin logged in');
-  const again = await b.get('/admin');
+  const again = await b.get('/admin/stock');
   const resent = again.setCookies.find((c) => c.name === 'admin.sid');
   if (resent) assert.equal(new Date(resent.attrs.expires).getTime(), expires, 'Expires never slides');
 });
@@ -393,7 +393,7 @@ test('wrong password: 401 with the login form again, not logged in', async () =>
   assert.match(res.text, /Wrong password\./);
   assertAdminHeaders(res, 'POST /admin/login wrong');
   assert.ok(!res.setCookies.some((c) => c.name === 'admin.sid'));
-  assert.equal((await b.get('/admin')).status, 303);
+  assert.equal((await b.get('/admin/stock')).status, 303);
 });
 
 test('unknown state (missing, empty, oversized, repeated field) gets exactly the wrong-password response', async () => {
@@ -454,7 +454,7 @@ test('CSRF: missing or bad token gives 403 on login and logout', async () => {
   for (const form of [{}, { _csrf: 'forged' }, { _csrf: token }]) {
     assert.equal((await b.post('/admin/logout', { form })).status, 403);
   }
-  assert.equal((await b.get('/admin')).status, 200, 'still logged in after refused logouts');
+  assert.equal((await b.get('/admin/stock')).status, 200, 'still logged in after refused logouts');
 });
 
 test('Origin: missing, foreign, null or wrong-scheme Origin gives 403', async () => {
@@ -470,12 +470,12 @@ test('Origin: missing, foreign, null or wrong-scheme Origin gives 403', async ()
     assert.equal(res.status, 403, `origin ${origin}`);
   }
   assert.equal((await b.login()).status, 303);
-  const home = await b.get('/admin');
+  const home = await b.get('/admin/stock');
   const logoutToken = home.text.match(/name="_csrf" value="([^"]+)"/)[1];
   seenSecrets.add(logoutToken);
   const res = await b.post('/admin/logout', { form: { _csrf: logoutToken }, headers: { origin: 'https://evil.example' } });
   assert.equal(res.status, 403);
-  assert.equal((await b.get('/admin')).status, 200);
+  assert.equal((await b.get('/admin/stock')).status, 200);
 });
 
 // The Origin a browser puts on a same-origin form POST, by the page's Referrer-Policy.
@@ -527,8 +527,8 @@ test('session id changes at login, and the old id stops working', async () => {
   assert.equal(res.status, 303);
   const second = fresh.sid();
   assert.ok(second && second !== first, 'new session id');
-  assert.equal((await b.get('/admin')).status, 303, 'old id is dead');
-  assert.equal((await fresh.get('/admin')).status, 200);
+  assert.equal((await b.get('/admin/stock')).status, 303, 'old id is dead');
+  assert.equal((await fresh.get('/admin/stock')).status, 200);
 
   // A planted id that the server never issued is also replaced.
   const planted = new Browser(main, { ip: '203.0.113.44' });
@@ -542,7 +542,7 @@ test('logout destroys the session and replaying the old cookie lands on the logi
   const b = new Browser(main, { ip: '203.0.113.45' });
   assert.equal((await b.login()).status, 303);
   const sid = b.sid();
-  const home = await b.get('/admin');
+  const home = await b.get('/admin/stock');
   const token = home.text.match(/name="_csrf" value="([^"]+)"/)[1];
   seenSecrets.add(token);
   const out = await b.post('/admin/logout', { form: { _csrf: token } });
@@ -551,7 +551,7 @@ test('logout destroys the session and replaying the old cookie lands on the logi
   const cleared = out.setCookies.find((c) => c.name === 'admin.sid');
   assert.ok(cleared && cleared.attrs.path === '/admin', 'cookie cleared on /admin');
 
-  const replay = await b.get('/admin', { cookie: `admin.sid=${sid}` });
+  const replay = await b.get('/admin/stock', { cookie: `admin.sid=${sid}` });
   assert.equal(replay.status, 303);
   assert.equal(replay.headers.get('location'), '/admin/login');
   const replayLogout = await b.post('/admin/logout', { form: { _csrf: token }, cookie: `admin.sid=${sid}` });
@@ -567,14 +567,14 @@ test('a customer cookie grants nothing under /admin', async () => {
   assert.equal(customer.path, '/');
 
   // The browser sends connect.sid (Path=/) to /admin too: it must not count as a login.
-  const res = await b.get('/admin');
+  const res = await b.get('/admin/stock');
   assert.equal(res.status, 303);
   assert.equal(res.headers.get('location'), '/admin/login');
   assert.ok(!res.setCookies.some((c) => c.name === 'connect.sid'), 'customer session middleware skipped');
   assert.equal((await b.post('/admin/logout', { form: {} })).status, 403);
 
   // The same value presented as an admin cookie is not valid either (different secret).
-  const replay = await b.get('/admin', { cookie: `admin.sid=${customer.value}` });
+  const replay = await b.get('/admin/stock', { cookie: `admin.sid=${customer.value}` });
   assert.equal(replay.status, 303);
 });
 
@@ -594,7 +594,7 @@ test('the admin cookie is scoped to /admin and is not accepted on customer route
   const issued = asCustomer.setCookies.find((c) => c.name === 'connect.sid');
   assert.ok(issued && issued.value !== sid, 'admin id is not a valid customer session');
   await b.post('/reset', { cookie: `connect.sid=${sid}` });
-  assert.equal((await b.get('/admin')).status, 200, 'admin session survives customer routes');
+  assert.equal((await b.get('/admin/stock')).status, 200, 'admin session survives customer routes');
 });
 
 test('customer routes are unchanged: no admin headers on /, /menu, /api/menu', async () => {
@@ -663,10 +663,10 @@ test('idle expiry: 60 minutes without a request ends the session', async () => {
     const b = new Browser(s, { ip: '203.0.113.70' });
     assert.equal((await b.login()).status, 303);
     s.clock.t += 59 * 60 * 1000;
-    assert.equal((await b.get('/admin')).status, 200, 'still in at 59 minutes');
+    assert.equal((await b.get('/admin/stock')).status, 200, 'still in at 59 minutes');
     s.clock.t += 60 * 60 * 1000;
-    assert.equal((await b.get('/admin')).status, 303, 'out after 60 idle minutes');
-    assert.equal((await b.get('/admin')).status, 303, 'and the session is gone');
+    assert.equal((await b.get('/admin/stock')).status, 303, 'out after 60 idle minutes');
+    assert.equal((await b.get('/admin/stock')).status, 303, 'and the session is gone');
   } finally {
     s.stop();
   }
@@ -679,10 +679,10 @@ test('absolute expiry: 8 hours after login ends the session even while active', 
     assert.equal((await b.login()).status, 303);
     for (let i = 1; i <= 8; i += 1) {
       s.clock.t += 59 * 60 * 1000;
-      assert.equal((await b.get('/admin')).status, 200, `active at ${i * 59} minutes`);
+      assert.equal((await b.get('/admin/stock')).status, 200, `active at ${i * 59} minutes`);
     }
     s.clock.t += 59 * 60 * 1000;
-    assert.equal((await b.get('/admin')).status, 303, 'out at 531 minutes');
+    assert.equal((await b.get('/admin/stock')).status, 303, 'out at 531 minutes');
   } finally {
     s.stop();
   }
