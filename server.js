@@ -1802,6 +1802,7 @@ const PORT = process.env.PORT || 3000;
 async function bootStock() {
   if (!process.env.DATABASE_URL) {
     console.warn('[stock] DATABASE_URL is not set: stock tracking is OFF and every item counts as in stock.');
+    stock.markTrackingOff();
     return;
   }
   try {
