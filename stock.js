@@ -11,7 +11,9 @@
 // behaves exactly like the café had no inventory tracking at all.
 //
 // D3 reads it on the chat and voice path through isInStock() and outOfStockNames(), both
-// plain memory reads.
+// plain memory reads. D5's admin stock page changes it through setInMemory() (after the
+// database write has succeeded), reads getStockStatus() for its banner, and calls
+// reloadStock() for its Reload button.
 
 const DEFAULT_TIMING = {
   // The boot load is allowed this long before the server starts without it. Render's own
@@ -29,6 +31,20 @@ const DEFAULT_TIMING = {
 
 let stockMap = new Map();
 
+// Status for the admin page banner. trackingOff: no DATABASE_URL. lastLoadedAt: when a load
+// from the database last succeeded (boot, retry, follow-up reload or the Reload button).
+let trackingOff = false;
+let lastLoadedAt = null;
+
+// Toggles made with setInMemory, numbered. A load that started before a toggle read the
+// database before (or while) that toggle was written, so its rows may be older than the
+// toggle. applyRows puts every toggle made since the load started back on top, so a slower
+// load can never undo a newer toggle. Toggles are rare (one person tapping buttons), so a
+// short list is plenty.
+let version = 0;
+const recentToggles = [];
+const MAX_RECENT_TOGGLES = 200;
+
 // Pass the item's name exactly as it appears in menu.json (menuItem.name). Anything not in
 // the Map, including a name that is not on the menu at all, counts as in stock.
 function isInStock(itemName) {
@@ -42,10 +58,40 @@ function outOfStockNames() {
   return [...stockMap].filter(([, inStock]) => !inStock).map(([name]) => name);
 }
 
+// Sets one item, in memory only. Callers write the database first (db.setStock) and call
+// this only once that write has succeeded, so memory never holds a state the database does
+// not. The caller checks the name against menu.json; this file does not read the menu.
+function setInMemory(itemName, inStock) {
+  if (typeof itemName !== 'string' || itemName.length === 0) {
+    throw new TypeError('setInMemory: itemName must be a non-empty string');
+  }
+  if (typeof inStock !== 'boolean') {
+    throw new TypeError('setInMemory: inStock must be a boolean');
+  }
+  version += 1;
+  recentToggles.push({ version, itemName, inStock });
+  if (recentToggles.length > MAX_RECENT_TOGGLES) recentToggles.shift();
+  stockMap.set(itemName, inStock);
+}
+
+// off: no DATABASE_URL, tracking is switched off. ok: a load from the database has
+// succeeded. unavailable: the database is configured but nothing has loaded yet (the boot
+// load failed, or has not finished), so every item counts as in stock.
+function getStockStatus() {
+  if (trackingOff) return { state: 'off', lastLoadedAt: null };
+  return { state: lastLoadedAt === null ? 'unavailable' : 'ok', lastLoadedAt };
+}
+
+// Called by server.js when DATABASE_URL is not set.
+function markTrackingOff() {
+  trackingOff = true;
+}
+
 // Replaces the whole Map in one swap, so a reader never sees a half-filled one. Rows for
 // names that are not on the menu are orphans (an item renamed or removed in menu.json): they
-// are reported, never stored, so they cannot affect anything.
-function applyRows(rows, menuNames) {
+// are reported, never stored, so they cannot affect anything. sinceVersion is the toggle
+// count when the load started: toggles made after that are newer than the rows and win.
+function applyRows(rows, menuNames, sinceVersion = version) {
   const known = new Set(menuNames);
   const next = new Map();
   const orphans = [];
@@ -56,7 +102,11 @@ function applyRows(rows, menuNames) {
     }
     next.set(row.item_name, row.in_stock !== false);
   }
+  for (const toggle of recentToggles) {
+    if (toggle.version > sinceVersion) next.set(toggle.itemName, toggle.inStock);
+  }
   stockMap = next;
+  lastLoadedAt = Date.now();
   const outOfStock = [...next].filter(([, inStock]) => !inStock).map(([name]) => name);
   return { rows: rows.length, outOfStock, orphans };
 }
@@ -125,6 +175,8 @@ function describeError(err) {
 async function initStock({ menuNames, loadFn, log = console, timing = {} }) {
   const t = { ...DEFAULT_TIMING, ...timing };
   stopStock();
+  trackingOff = false;
+  lastLoadedAt = null;
   const myGeneration = generation;
   const isStale = () => myGeneration !== generation;
 
@@ -132,12 +184,13 @@ async function initStock({ menuNames, loadFn, log = console, timing = {} }) {
   // flight, otherwise to { ok, ms, ... }. Callers must check stale before doing anything.
   async function attempt(timeoutMs) {
     const started = Date.now();
+    const startVersion = version;
     try {
       const rows = await withTimeout(loadFn(), timeoutMs);
       if (isStale()) {
         return { stale: true };
       }
-      const applied = applyRows(rows, menuNames);
+      const applied = applyRows(rows, menuNames, startVersion);
       return { ok: true, ms: Date.now() - started, ...applied };
     } catch (err) {
       if (isStale()) {
@@ -236,4 +289,26 @@ async function initStock({ menuNames, loadFn, log = console, timing = {} }) {
   return { ok: boot.ok };
 }
 
-module.exports = { isInStock, outOfStockNames, initStock, stopStock };
+// One load on demand (the admin Reload button, or after a toggle while the status is
+// unavailable). Resolves to { ok: true, rows, outOfStock, orphans } or { ok: false, error },
+// never throws. A failed load leaves the Map exactly as it was.
+async function reloadStock({ menuNames, loadFn, timeoutMs = DEFAULT_TIMING.attemptTimeoutMs }) {
+  const startVersion = version;
+  try {
+    const rows = await withTimeout(loadFn(), timeoutMs);
+    return { ok: true, ...applyRows(rows, menuNames, startVersion) };
+  } catch (err) {
+    return { ok: false, error: err };
+  }
+}
+
+module.exports = {
+  isInStock,
+  outOfStockNames,
+  initStock,
+  stopStock,
+  setInMemory,
+  getStockStatus,
+  markTrackingOff,
+  reloadStock
+};

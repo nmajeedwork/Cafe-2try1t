@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{{TITLE}} | Admin</title>
+<link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body class="admin">
+<header class="admin-header">
+  <nav class="admin-nav" aria-label="Admin sections">{{NAV}}</nav>
+  <form method="post" action="/admin/logout" class="logout">
+    <input type="hidden" name="_csrf" value="{{CSRF_TOKEN}}">
+    <button type="submit">Log out</button>
+  </form>
+</header>
+<main>
+{{BANNERS}}
+{{CONTENT}}
+</main>
+</body>
+</html>

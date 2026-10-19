@@ -11,10 +11,15 @@
 //   - hashPassword / verifyPassword: scrypt from node:crypto, compared in constant time.
 //     Any input that is not a usable password still runs one full scrypt, so it costs the
 //     same time and gets the same response as a wrong password.
-//   - createAdminRouter: login, logout and a placeholder logged-in page. Every POST needs a
-//     matching Origin header and a CSRF token. Wrong passwords are limited per IP (5 per 15
-//     minutes, then 429), and 20 or more failures in an hour across all IPs writes a loud
-//     warning to the log without blocking anyone.
+//   - createAdminRouter: login, logout, and the admin sections (D5: Stock, in
+//     admin/sections/). Every POST needs a matching Origin header and a CSRF token. Wrong
+//     passwords are limited per IP (5 per 15 minutes, then 429), and 20 or more failures in
+//     an hour across all IPs writes a loud warning to the log without blocking anyone.
+//
+// Sections: each file in admin/sections/ exports { path, title, register(router, helpers) }
+// and adds its own routes through the shared helpers below (login check, Origin check,
+// CSRF check, page layout). A new section (orders, charts, item editing) is a new file plus
+// one entry in DEFAULT_SECTIONS; nothing else has to change.
 //
 // Never logged: passwords, hashes, CSRF tokens, session ids.
 
@@ -144,7 +149,7 @@ const ADMIN_HEADERS = {
   'Cache-Control': 'no-store',
   'X-Frame-Options': 'DENY',
   'Content-Security-Policy':
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
   // Not no-referrer: under that policy browsers send "Origin: null" on every form POST,
   // even same-origin ones (Fetch spec, "append a request Origin header"), so the strict
   // Origin check below would refuse every real login. same-origin keeps the real Origin on
@@ -174,9 +179,24 @@ function loadPage(file) {
   return fs.readFileSync(path.join(__dirname, 'admin', file), 'utf8');
 }
 
-function createAdminRouter(config, { isDev = false, now = Date.now, log = console } = {}) {
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch]);
+
+// Fills {{NAME}} placeholders in one pass over the template only, so text that is put in is
+// never scanned again (a value containing "{{X}}" or "$&" stays as it is).
+function fillTemplate(template, values) {
+  return template.replace(/\{\{([A-Z_]+)\}\}/g, (match, key) => (key in values ? values[key] : match));
+}
+
+const DEFAULT_SECTIONS = ['stock'];
+
+function createAdminRouter(config, { isDev = false, now = Date.now, log = console, sections, deps = {} } = {}) {
   const loginPage = loadPage('login.html');
-  const homePage = loadPage('home.html');
+  const layoutPage = loadPage('layout.html');
+  const adminCss = loadPage('admin.css');
+  // Loaded here, not at the top, so scripts/hash-admin-password.js (which only needs the
+  // hashing helpers) never loads the stock, database or menu modules.
+  const sectionList = sections || DEFAULT_SECTIONS.map((name) => require(`./admin/sections/${name}`));
   const cookieBase = { path: ADMIN_PATH, httpOnly: true, secure: !isDev, sameSite: 'strict' };
 
   // Login CSRF is stateless so anonymous visitors never create store entries: the admin.pre
@@ -258,6 +278,12 @@ function createAdminRouter(config, { isDev = false, now = Date.now, log = consol
     return next();
   });
 
+  // The admin stylesheet. Static, the same for everyone, and needed by the login page, so it
+  // needs no session. Served from here (not public/) so the CSP can stay at style-src 'self'.
+  router.get('/assets/admin.css', (req, res) => {
+    res.type('text/css').send(adminCss);
+  });
+
   router.use(
     session({
       name: SESSION_COOKIE,
@@ -287,9 +313,10 @@ function createAdminRouter(config, { isDev = false, now = Date.now, log = consol
     return next();
   });
 
+  // /admin itself is just the way in: the first section when logged in, else the login page.
   router.get('/', (req, res) => {
     if (!req.admin) return res.redirect(303, `${ADMIN_PATH}/login`);
-    return res.type('html').send(homePage.replace('{{CSRF_TOKEN}}', req.admin.csrf));
+    return res.redirect(303, `${ADMIN_PATH}${sectionList[0].path}`);
   });
 
   router.get('/login', (req, res) => {
@@ -334,6 +361,58 @@ function createAdminRouter(config, { isDev = false, now = Date.now, log = consol
     });
   });
 
+  // --- Shared helpers for the sections ---------------------------------------------------
+  const helpers = {
+    escapeHtml,
+    requireSameOrigin,
+    // Pages: not logged in goes to the login page, like GET /admin.
+    requirePageLogin(req, res, next) {
+      if (!req.admin) return res.redirect(303, `${ADMIN_PATH}/login`);
+      return next();
+    },
+    // Actions (POST): not logged in, or a missing or wrong per-session CSRF token, is a 403,
+    // the same as POST /admin/logout. Use after requireSameOrigin.
+    requireActionLogin(req, res, next) {
+      if (!req.admin || !safeEqual(req.body && req.body._csrf, req.admin.csrf)) return forbidden(res);
+      return next();
+    },
+    // A message shown once on the next page view (after a post and redirect).
+    setFlash(req, message) {
+      req.session.admin.flash = message;
+    },
+    takeFlash(req) {
+      const message = req.admin && req.admin.flash;
+      if (message) delete req.session.admin.flash;
+      return message || null;
+    },
+    // Wraps a section's HTML in the shared layout: nav, banners, logout form.
+    renderPage(req, res, { status = 200, title, sectionPath, content, banners = [] }) {
+      const nav = sectionList
+        .map((s) => {
+          const current = s.path === sectionPath ? ' aria-current="page"' : '';
+          return `<a href="${ADMIN_PATH}${s.path}"${current}>${escapeHtml(s.title)}</a>`;
+        })
+        .join('');
+      const bannerHtml = banners
+        .map((b) => `<div class="banner banner-${b.kind}" role="${b.kind === 'success' ? 'status' : 'alert'}">${escapeHtml(b.text)}</div>`)
+        .join('\n');
+      const html = fillTemplate(layoutPage, {
+        TITLE: escapeHtml(title),
+        NAV: nav,
+        CSRF_TOKEN: req.admin.csrf,
+        BANNERS: bannerHtml,
+        CONTENT: content
+      });
+      return res.status(status).type('html').send(html);
+    },
+    log,
+    now
+  };
+
+  for (const section of sectionList) {
+    section.register(router, helpers, deps);
+  }
+
   router.use((req, res) => plain(res, 404, 'Not found'));
 
   // Errors stay inside the router so they never reach Express's default error page.
@@ -354,6 +433,7 @@ function isAdminPath(urlPath) {
 }
 
 module.exports = {
+  escapeHtml,
   loadAdminConfig,
   createAdminRouter,
   isAdminPath,
