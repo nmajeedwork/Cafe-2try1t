@@ -87,6 +87,8 @@ The visual redesign, all five security hardening passes (H1-H5), and deployment 
 
 ## Inventory/Stock Management Dashboard (deferred, not yet scoped in detail)
 
+Status: the stock toggle (v1) is planned and built in milestones D2 to D6, see [inventory-plan.md](inventory-plan.md). The notes below are the original scoping.
+
 Goal: replace the static menu.json with live inventory tracking, and give Nmajeed a web dashboard to add/edit items and mark things out of stock, with CafeBot responding based on real-time availability instead of a fixed list.
 
 Known scope, roughly comparable in size to the visual redesign effort:

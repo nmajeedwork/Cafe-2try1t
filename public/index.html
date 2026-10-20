@@ -159,11 +159,19 @@
 
   <script src="nav.js"></script>
   <script src="reveal.js"></script>
+  <script src="availability.js"></script>
   <script>
     (function () {
       // --- Featured items: three specific items, data pulled live from the menu API ---
       var grid = document.getElementById('featured-grid');
       if (!grid) return;
+
+      // Sold-out badges: asked for at the same time as the menu. Optional decoration (see
+      // availability.js): if that file did not load, or the answer is anything other than
+      // the expected list, this resolves to [] and the cards are exactly as before.
+      var availabilityPromise = window.CafeAvailability
+        ? window.CafeAvailability.fetchUnavailable(fetch)
+        : Promise.resolve([]);
 
       fetch('/api/menu')
         .then(function (res) {
@@ -208,6 +216,9 @@
             return 'item-' + slug;
           }
           grid.innerHTML = '';
+          // Exact item name -> its card and its description, for the sold-out badges.
+          var cardsByName = new Map();
+          var descsByName = new Map();
           featured.forEach(function (item) {
             // The whole card is one real link to this item on the Menu page.
             var card = document.createElement('a');
@@ -240,6 +251,28 @@
             card.appendChild(name);
             card.appendChild(desc);
             grid.appendChild(card);
+            cardsByName.set(item.name, card);
+            descsByName.set(item.name, desc);
+          });
+
+          // Own promise chain that swallows every error, so nothing here can ever replace
+          // the cards with the error message or change them when something goes wrong.
+          availabilityPromise.then(function (names) {
+            try {
+              window.CafeAvailability.applySoldOut(cardsByName, names, function (card, itemName) {
+                if (card.hasAttribute('data-sold-out')) return;
+                card.setAttribute('data-sold-out', 'true');
+                // Inside the card's link, right after the heading, so it is read as part
+                // of the card, next to the item name. The card still links to the item on
+                // the Menu page.
+                var badge = document.createElement('span');
+                badge.className = 'sold-out-badge';
+                badge.textContent = 'Sold out';
+                card.insertBefore(badge, descsByName.get(itemName));
+              });
+            } catch (err) {
+              // Decoration only: the cards stay as they are.
+            }
           });
         })
         .catch(function () {
