@@ -1,6 +1,6 @@
 # Inventory Dashboard Plan (D1)
 
-Approved plan for adding stock tracking to CafeBot. D1 (planning) is complete. Nothing in this plan is implemented yet. Each milestone below is planned, approved, built, and verified on its own, following the usual working conventions in [project-instructions.md](project-instructions.md).
+Approved plan for adding stock tracking to CafeBot. D1 (planning) is complete, and D2 to D6 are built (D6 once its PR is merged). D7, the security pass and deploy checks, is still ahead. Each milestone below is planned, approved, built, and verified on its own, following the usual working conventions in [project-instructions.md](project-instructions.md).
 
 ## Scope for v1
 
@@ -100,8 +100,12 @@ One short sentence plus up to two alternatives, for example: "Sorry, the blueber
 
 ### Public site
 
-* New `GET /api/availability` returns `{ "unavailable": [...] }`, read from memory.
+* New `GET /api/availability` returns `{ "unavailable": [...] }`: item names from `menu.json` only, in menu order, read from memory (`stock.outOfStockNames` through `currentlyUnavailable` in `server.js`). No database call, no login, no session or cookie. With stock tracking off, or the boot load failed and nothing has loaded since, it returns an empty list, the same as "everything in stock". It sends `Cache-Control: no-cache` (a browser must revalidate before every use, so a visitor never sees an older answer than the server's; revalidation is a tiny 304) and `X-Content-Type-Options: nosniff`.
+* Not rate limited, on purpose: it is a memory read of at most a few hundred bytes with the same exposure as `/api/menu`, and a 429 would silently hide the labels. It reveals only which items are sold out, which the labels show anyway.
 * `/api/menu` stays byte-for-byte unchanged.
+* `public/availability.js` (shared by both pages) fetches the list. Anything unexpected (network error, timeout after 4 seconds, non-OK status, any shape other than `{ unavailable: [strings] }`) means no labels and no error: the pages look exactly as they did before. Names are matched by exact string only and are never put into markup; the label text is the constant "Sold out".
+* Menu page: each sold-out row gets a "Sold out" pill after the item name (ink text on sand, 12.1:1, with a border so it is not colour alone). Home: each sold-out featured card gets a "Sold out" badge over the photo corner (cream on ink, 14.5:1), inside the card's link, so the card still links to `/menu#item-<slug>`. Both are real text placed right after the item name, so a screen reader announces it with the name (checked in Chromium: the featured card is still one link, named "Blueberry Muffin Sold out Moist muffin ..."). If the page was opened at a `#item-...` link and the visitor has not scrolled, the jump is repeated after the labels land.
+* A visitor's open page does not refresh its labels (no polling in v1). The server still enforces stock, so a stale page cannot add a sold-out item to an order.
 
 ## Failure behavior (Option A)
 
@@ -171,6 +175,7 @@ Nmajeed does these. Claude creates no accounts.
 
 ## Known issues
 
+* Public pages and `/api/*` send no `Content-Security-Policy` or other security headers today (only `X-Powered-By`). The pages use inline scripts and Google Fonts, so a CSP for them needs nonces or hashes. For the D7 pass. The admin pages already have a strict CSP (D4, D5).
 * `CLAUDE.md` tells Claude Code to use a `/browse` skill for all web browsing, but that skill does not exist in this environment. D1 vendor research used web fetch and web search instead.
 * App-created worktrees conflict with the primary-folder rule. [project-instructions.md](project-instructions.md) says to work in the project folder and never use worktrees, but the Claude desktop app creates a worktree for each session (D2 ran in `.claude/worktrees/sweet-heyrovsky-9221b2`). Git allows a branch in only one checkout at a time, so a branch created in a session worktree is stuck there until the worktree is detached. Workaround used for D2: commit in the worktree, detach it with `git switch --detach`, then check the branch out in the primary folder. Still to decide: whether to stop the app from creating worktrees, or to relax the rule.
 * Stale worktree: `.claude/worktrees/cafebot-session-complete-d9abda` (created 2026-09-24, detached at `fbc7d16`) is still registered and has not been reviewed or removed. Leave it alone until someone checks it for anything unmerged.
