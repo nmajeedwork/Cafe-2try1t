@@ -188,6 +188,27 @@ body.page {
   color: var(--color-accent);
 }
 
+/* Sold-out label (public/menu.js adds it after the item name). The word is the signal, not
+   the colour: ink text on sand is 12.1:1 and the 1px ink border keeps the pill visible in
+   forced-colors mode. Price and description stay as they are, so no text loses contrast. */
+.page--menu .sold-out-label {
+  display: inline-block;
+  /* The plain space before it (added by menu.js) gives the rest of the gap; keeping the
+     margin small means a pill that wraps onto its own line is barely indented. */
+  margin-left: 4px;
+  padding: 1px 9px;
+  border: 1px solid var(--color-ink);
+  border-radius: 999px;
+  background: #E9DDC3;
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
 /* --- ABOUT — visit / hours / contact, styled like Home's Visit section --- */
 .page--about .about-grid {
   display: grid;
@@ -653,6 +674,26 @@ body.home {
   margin: 0;
   color: var(--color-muted-2);
   font-style: italic;
+}
+
+/* Sold-out badge on a featured card (the inline script in index.html adds it inside the
+   card link). Cream on ink is 14.5:1 over any photo, it sits over the photo's corner so it
+   adds no height, and the border (same colour as the fill) is what stays visible in
+   forced-colors mode. The card keeps linking to the item on the Menu page. */
+.home .sold-out-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 1;
+  padding: 3px 10px;
+  border: 1px solid var(--color-ink);
+  background: var(--color-ink);
+  color: var(--color-bg);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
 }
 
 @media (max-width: 760px) {

@@ -1130,6 +1130,18 @@ app.get('/api/menu', (req, res) => {
   res.json(menu);
 });
 
+// D6: which menu items are sold out right now, for the public Menu page and Home's featured
+// cards (public/availability.js). A memory read only: no database, no login, no session
+// (so no cookie), and only item names from menu.json, in menu order. With stock tracking off
+// or unavailable the list is empty, the same as "everything in stock". no-cache lets a
+// browser keep a copy but makes it check before every use, so a visitor is never shown an
+// older answer than the server's. Deliberately not rate limited: it is a tiny memory read,
+// like /api/menu, and a 429 would silently hide the labels.
+app.get('/api/availability', (req, res) => {
+  res.set({ 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+  res.json({ unavailable: currentlyUnavailable() });
+});
+
 app.post('/chat', ...costEndpointLimiters, async (req, res) => {
   const userMessage = (req.body.message || '').trim();
   if (!userMessage) {
