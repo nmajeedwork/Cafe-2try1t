@@ -8,6 +8,9 @@
 //                             error: "permanent" (like a wrong password: no retries) or
 //                             anything else (like a refused connection: retried).
 //   <FAKE_DB_FILE>.writes     every setStock call that succeeded, one JSON line each.
+//   <FAKE_DB_FILE>.calls      every call of any kind (loadStock, setStock, deleteStock), one
+//                             line each, whether it worked or not. Tests that prove "no
+//                             database call" compare its line count before and after.
 //   FAKE_DB_SET_DELAYS        optional comma separated delays in ms, used by setStock calls
 //                             in order (the first call waits the first delay, and so on).
 //
@@ -48,13 +51,16 @@ function failIfDown() {
 }
 
 const read = () => (fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {});
+const logCall = (name) => fs.appendFileSync(`${file}.calls`, `${name}\n`);
 
 require.cache[dbPath].exports = {
   async loadStock() {
+    logCall('loadStock');
     failIfDown();
     return Object.entries(read()).map(([item_name, in_stock]) => ({ item_name, in_stock }));
   },
   async setStock(itemName, inStock) {
+    logCall('setStock');
     const delay = delays[setCalls] || 0;
     setCalls += 1;
     if (delay) await sleep(delay);
@@ -65,6 +71,7 @@ require.cache[dbPath].exports = {
     fs.appendFileSync(`${file}.writes`, `${JSON.stringify({ itemName, inStock })}\n`);
   },
   async deleteStock(itemName) {
+    logCall('deleteStock');
     failIfDown();
     const state = read();
     const had = itemName in state;
