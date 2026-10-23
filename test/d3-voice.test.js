@@ -374,6 +374,65 @@ test('D3 follow-up: nothing sold out, the caller asks for the muffin and it goes
 });
 
 // ------------------------------------------------------------------------------------
+// D7: voice resume ignores a confirmed order
+// ------------------------------------------------------------------------------------
+
+test('D7: a confirmed order saved inside the window is not offered on the next call', async () => {
+  const server = await startServer();
+  try {
+    const from = testNumber();
+    writeSavedOrder(
+      from,
+      [{ name: 'Caffe Latte', quantity: 1, size: 'Medium', customizations: [], price: 4.75 }],
+      { type: 'pickup', deliveryAddress: null, customerName: 'Sam', pickupTime: 'ASAP', confirmed: true, confirmedAt: new Date().toISOString(), orderId: '2TRY1T-TEST' }
+    );
+    const call = new Call(server, from);
+    const greeting = await call.incoming();
+    assert.match(greeting, /Thanks for calling To Try It/);
+    assert.doesNotMatch(greeting, /Welcome back/);
+    await sleep(100);
+    assert.ok(!fs.existsSync(orderFile(from)), 'the confirmed file is deleted');
+    assert.match(server.output(), /\[voice resume\] ignored a saved order \(order already confirmed\), file deleted\./);
+    assert.ok(!server.output().includes(from.slice(1)), 'the phone number is not logged');
+
+    // The new call starts with an empty cart.
+    await call.say('TOOL view_cart');
+    assert.deepEqual(lastToolResult().items, []);
+    assert.equal(lastToolResult().subtotal, 0);
+  } finally {
+    server.stop();
+  }
+});
+
+test('D7 save guard: after a confirmed order, hitting a call limit saves nothing for callback', async () => {
+  const server = await startServer({ env: { MAX_CALL_TURNS: '2' } });
+  try {
+    const from = testNumber();
+    writeSavedOrder(
+      from,
+      [{ name: 'Drip Coffee', quantity: 1, size: 'Medium', customizations: [], price: 2.75 }],
+      { type: 'pickup', deliveryAddress: null, customerName: 'Sam', pickupTime: 'ASAP', confirmed: false, confirmedAt: null, orderId: null }
+    );
+    const call = new Call(server, from);
+    assert.match(await call.incoming(), /Welcome back/);
+    assert.match(await call.say('TOOL confirm_order'), /"confirmed":true/);
+    await sleep(100);
+    assert.ok(!fs.existsSync(orderFile(from)), 'confirming clears the saved copy');
+
+    await call.say('hello');
+    const ended = await call.say('one more');
+    assert.match(ended, /Please feel free to call back anytime/);
+    assert.doesNotMatch(ended, /Your order is saved/);
+    assert.ok(!fs.existsSync(orderFile(from)), 'nothing saved at the limit');
+
+    const callback = new Call(server, from);
+    assert.doesNotMatch(await callback.incoming(), /Welcome back/);
+  } finally {
+    server.stop();
+  }
+});
+
+// ------------------------------------------------------------------------------------
 // H5 rerun
 // ------------------------------------------------------------------------------------
 

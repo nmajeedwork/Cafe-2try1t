@@ -37,9 +37,31 @@ function clearInProgressOrder(from) {
   fs.unlink(fileForNumber(from), () => {});
 }
 
+// A saved record is only usable if it has the shape saveInProgressOrder writes: an order
+// object, a cart array and an updatedAt that parses to a real date. Without a valid date
+// the age check below would compare NaN and never expire the record.
+function hasResumableShape(record) {
+  return (
+    !!record &&
+    typeof record === 'object' &&
+    !!record.order &&
+    typeof record.order === 'object' &&
+    !Array.isArray(record.order) &&
+    Array.isArray(record.cart) &&
+    typeof record.updatedAt === 'string' &&
+    !Number.isNaN(new Date(record.updatedAt).getTime())
+  );
+}
+
 // Looks up a still-fresh partial order for this caller number, so a new call from the
 // same number can pick up where a dropped call left off. Returns null if there's nothing
 // saved, or it's older than RESUME_WINDOW_MS (treated as abandoned by then).
+//
+// D7 defense in depth: the save paths in server.js never write a confirmed order, but a
+// file left behind anyway (a crash between confirm and clear, an old file, a hand edit)
+// must never bring a finished order back into a new call. A record with the wrong shape
+// or with order.confirmed true is deleted and ignored. The log line names the reason
+// only, never the phone number.
 function findResumableOrder(from) {
   if (!from) {
     return null;
@@ -53,6 +75,13 @@ function findResumableOrder(from) {
   try {
     record = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
+    return null;
+  }
+
+  if (!hasResumableShape(record) || record.order.confirmed === true) {
+    const reason = hasResumableShape(record) ? 'order already confirmed' : 'invalid shape';
+    console.warn(`[voice resume] ignored a saved order (${reason}), file deleted.`);
+    fs.unlink(file, () => {});
     return null;
   }
 
