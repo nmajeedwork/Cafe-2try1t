@@ -69,7 +69,8 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
-const session = require('express-session');
+const { createCustomerSession } = require('./customer-session');
+const { trimHistory } = require('./chat-history');
 const Anthropic = require('@anthropic-ai/sdk');
 const twilio = require('twilio');
 const VoiceResponse = twilio.twiml.VoiceResponse;
@@ -845,8 +846,10 @@ function plainDashes(text) {
 // CallSid) so both transports go through identical tools and cart/order logic — only
 // the system prompt (stableSystemText) differs, since voice needs spoken-conversation rules.
 // `signal` (optional, voice only) aborts any in-flight Anthropic request once the voice
-// turn's deadline passes - see VOICE_TURN_TIMEOUT_MS. /chat passes nothing.
-async function runCafeBotTurn(state, userMessage, stableSystemText, { signal } = {}) {
+// turn's deadline passes - see VOICE_TURN_TIMEOUT_MS. /chat passes its own turn deadline
+// signal plus `requestOptions` (D7: per-request timeout and retries, see CHAT_* below);
+// voice passes no requestOptions, so its requests are exactly as before.
+async function runCafeBotTurn(state, userMessage, stableSystemText, { signal, requestOptions } = {}) {
   // Blank history with an already-populated cart can only happen on the first turn of a
   // resumed call (a genuinely fresh session always starts with an empty cart) - check
   // before pushing this turn's message so it only fires once, on that first turn.
@@ -862,7 +865,7 @@ async function runCafeBotTurn(state, userMessage, stableSystemText, { signal } =
     system: systemBlocks,
     tools: TOOLS,
     messages: withCacheBreakpoint(state.history)
-  }, { signal });
+  }, { ...requestOptions, signal });
   logCacheUsage(response.usage);
 
   let rounds = 0;
@@ -885,7 +888,7 @@ async function runCafeBotTurn(state, userMessage, stableSystemText, { signal } =
       system: systemBlocks,
       tools: TOOLS,
       messages: withCacheBreakpoint(state.history)
-    }, { signal });
+    }, { ...requestOptions, signal });
 
     logCacheUsage(response.usage);
     rounds += 1;
@@ -991,25 +994,11 @@ app.use(clientIp.createMismatchGuard({ hops: trustProxy.hops }));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded params
-const customerSession =
-  session({
-    secret: process.env.SESSION_SECRET || 'dev-secret',
-    resave: false,
-    // H3 hardening (security audit follow-up): only issue a session cookie once
-    // something has actually been written to req.session (first cart action or chat
-    // message). Someone who only browses Home/Menu/About never gets a cookie.
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      // secure requires HTTPS, which plain localhost dev doesn't have; drop it only
-      // for explicit NODE_ENV=development. Anywhere else (unset, production, a typo)
-      // is assumed to sit behind TLS terminated at the proxy in front of this app.
-      secure: !IS_DEV,
-      // Same-origin app (widget + site on one domain); Twilio webhooks are
-      // signature-authenticated, not cookie-based. 'lax' is the correct default.
-      sameSite: 'lax'
-    }
-  });
+// Cookie options, the 2 hour expiry and the store prune live in customer-session.js (D7).
+const customerSession = createCustomerSession({
+  isDev: IS_DEV,
+  secret: process.env.SESSION_SECRET || 'dev-secret'
+}).middleware;
 // D4: the customer session never runs under /admin, so a customer cookie grants nothing
 // there. The admin router has its own session (admin.js), mounted before express.static.
 app.use((req, res, next) => (isAdminPath(req.path) ? next() : customerSession(req, res, next)));
@@ -1142,6 +1131,19 @@ app.get('/api/availability', (req, res) => {
   res.json({ unavailable: currentlyUnavailable() });
 });
 
+// D7: limits for one /chat turn. Before, the SDK defaults applied (10 minutes per request,
+// 2 retries), so one slow upstream could hold a request for about half an hour.
+//   - each Anthropic request: 30 seconds, retried once
+//   - the whole turn, all tool rounds included: 60 seconds, enforced with an AbortSignal
+// Either limit gives the 503 below. Voice has its own limits (VOICE_TURN_TIMEOUT_MS).
+// The two CHAT_TEST_* variables shorten the limits for tests and are read ONLY with
+// NODE_ENV=development; anywhere else the real values always apply.
+const CHAT_REQUEST_TIMEOUT_MS = IS_DEV ? positiveNumberFromEnv('CHAT_TEST_REQUEST_TIMEOUT_MS', 30000, { integer: true }) : 30000;
+const CHAT_TURN_DEADLINE_MS = IS_DEV ? positiveNumberFromEnv('CHAT_TEST_TURN_DEADLINE_MS', 60000, { integer: true }) : 60000;
+const CHAT_MAX_RETRIES = 1;
+const CHAT_TIMEOUT_MESSAGE = 'CafeBot is taking too long to answer right now. Please try again in a moment.';
+const CHAT_ERROR_MESSAGE = 'Something went wrong talking to CafeBot. Please try again.';
+
 app.post('/chat', ...costEndpointLimiters, async (req, res) => {
   const userMessage = (req.body.message || '').trim();
   if (!userMessage) {
@@ -1150,13 +1152,32 @@ app.post('/chat', ...costEndpointLimiters, async (req, res) => {
 
   initSessionState(req.session);
 
+  const deadline = new AbortController();
+  const deadlineTimer = setTimeout(() => deadline.abort(), CHAT_TURN_DEADLINE_MS);
+  let result;
+  let failure;
   try {
-    const result = await runCafeBotTurn(req.session, userMessage, STABLE_SYSTEM_TEXT);
-    res.json(result);
+    result = await runCafeBotTurn(req.session, userMessage, STABLE_SYSTEM_TEXT, {
+      signal: deadline.signal,
+      requestOptions: { timeout: CHAT_REQUEST_TIMEOUT_MS, maxRetries: CHAT_MAX_RETRIES }
+    });
   } catch (err) {
-    console.error('Anthropic API error:', err);
-    res.status(500).json({ error: 'Something went wrong talking to CafeBot. Please try again.' });
+    failure = err;
+  } finally {
+    clearTimeout(deadlineTimer);
+    // Before the response is sent: express-session saves the session as the response ends.
+    req.session.history = trimHistory(req.session.history);
   }
+
+  if (!failure) {
+    return res.json(result);
+  }
+  if (deadline.signal.aborted || failure instanceof Anthropic.APIConnectionTimeoutError) {
+    console.error(`Anthropic API timeout (chat): ${deadline.signal.aborted ? 'turn deadline' : 'request timeout'} reached.`);
+    return res.status(503).json({ error: CHAT_TIMEOUT_MESSAGE });
+  }
+  console.error('Anthropic API error:', failure);
+  return res.status(500).json({ error: CHAT_ERROR_MESSAGE });
 });
 
 // Reusable <Gather> block — every turn of the phone conversation (the opening prompt,
@@ -1802,6 +1823,38 @@ app.post('/reset', (req, res) => {
     res.clearCookie('connect.sid');
     res.json({ success: true });
   });
+});
+
+// --- D7: final error handler -------------------------------------------------------------
+// Registered after every route, so it catches what nothing else handled, most often a body
+// the JSON or form parser above rejected (they run for every path, /admin included, before
+// any router). Without it Express's own error page answers, and outside NODE_ENV=production
+// that page contains the stack trace with file paths. This one never sends the stack, the
+// error message or the request body, in any environment: only a fixed message chosen by
+// status. Errors raised inside the admin router are still handled by the admin router's own
+// handler (admin.js) and never get here. The log line has no body and no stack either.
+const ERROR_RESPONSE_TEXT = {
+  400: 'Bad request.',
+  404: 'Not found.',
+  413: 'Request too large.',
+  415: 'Unsupported request.'
+};
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  const reported = Number(err && (err.status || err.statusCode));
+  const status = reported >= 400 && reported < 500 ? reported : 500;
+  const kind = (err && (err.type || err.name)) || 'Error';
+  console.error(`[error] ${status} ${req.method} ${req.path}: ${kind}`);
+  if (res.headersSent) {
+    // Too late for a clean reply; end the response without adding anything to it.
+    return res.end();
+  }
+  const text = ERROR_RESPONSE_TEXT[status] || (status < 500 ? 'Bad request.' : 'Something went wrong.');
+  res.status(status).set('X-Content-Type-Options', 'nosniff');
+  if (isAdminPath(req.path)) {
+    return res.set('Cache-Control', 'no-store').type('text/plain').send(text);
+  }
+  return res.json({ error: text });
 });
 
 const PORT = process.env.PORT || 3000;
