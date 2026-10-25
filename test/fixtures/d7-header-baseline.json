@@ -1,0 +1,80 @@
+{
+  "GET /admin/login": {
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store",
+      "content-security-policy": "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "content-type": "text/html; charset=utf-8",
+      "referrer-policy": "same-origin",
+      "x-frame-options": "DENY",
+      "x-powered-by": "Express",
+      "x-robots-tag": "noindex, nofollow"
+    }
+  },
+  "GET /admin/assets/admin.css": {
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store",
+      "content-security-policy": "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "content-type": "text/css; charset=utf-8",
+      "referrer-policy": "same-origin",
+      "x-frame-options": "DENY",
+      "x-powered-by": "Express",
+      "x-robots-tag": "noindex, nofollow"
+    }
+  },
+  "GET /admin/stock (logged out)": {
+    "status": 303,
+    "headers": {
+      "cache-control": "no-store",
+      "content-security-policy": "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "content-type": "text/plain; charset=utf-8",
+      "location": "/admin/login",
+      "referrer-policy": "same-origin",
+      "vary": "Accept",
+      "x-frame-options": "DENY",
+      "x-powered-by": "Express",
+      "x-robots-tag": "noindex, nofollow"
+    }
+  },
+  "POST /admin/login (right password)": {
+    "status": 303,
+    "headers": {
+      "cache-control": "no-store",
+      "content-security-policy": "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "content-type": "text/plain; charset=utf-8",
+      "location": "/admin",
+      "referrer-policy": "same-origin",
+      "vary": "Accept",
+      "x-frame-options": "DENY",
+      "x-powered-by": "Express",
+      "x-robots-tag": "noindex, nofollow"
+    }
+  },
+  "GET /admin/stock (logged in)": {
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store",
+      "content-security-policy": "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "content-type": "text/html; charset=utf-8",
+      "referrer-policy": "same-origin",
+      "x-frame-options": "DENY",
+      "x-powered-by": "Express",
+      "x-robots-tag": "noindex, nofollow"
+    }
+  },
+  "POST /voice/incoming (signed)": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/xml; charset=utf-8",
+      "x-powered-by": "Express"
+    }
+  },
+  "POST /voice/incoming (bad signature)": {
+    "status": 403,
+    "headers": {
+      "content-type": "text/plain; charset=utf-8",
+      "x-powered-by": "Express"
+    }
+  }
+}

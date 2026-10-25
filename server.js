@@ -65,6 +65,15 @@ if (trustProxy.error) {
   process.exit(1);
 }
 
+// --- D7: public security headers (see public-headers.js) -------------------------------
+// PUBLIC_CSP_MODE: "report-only" (the default) or "enforce". Anything else refuses to start.
+const publicHeaders = require('./public-headers');
+const cspMode = publicHeaders.parseCspMode(process.env);
+if (cspMode.error) {
+  console.error(`FATAL: ${cspMode.error} Refusing to start.`);
+  process.exit(1);
+}
+
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -974,6 +983,8 @@ function validateTwilioRequest(req, res, next) {
 }
 
 const app = express();
+// D7: no "X-Powered-By: Express" on any response, admin and voice included.
+app.disable('x-powered-by');
 
 // Twilio's requests arrive through a reverse proxy (ngrok in dev, and typically a load
 // balancer in production) that terminates TLS and forwards over plain HTTP. Without this,
@@ -989,6 +1000,18 @@ const app = express();
 // Twilio validation, the admin Origin check and Secure cookies do not depend on the count.
 app.set('trust proxy', trustProxy.hops);
 console.log(`[client-ip] trust proxy hops: ${trustProxy.hops}`);
+
+// D7: before every route and express.static, so pages, static files, 404s and error
+// replies all carry them. Skips /admin (the admin router sets its own) and gives /voice/*
+// nosniff only. The inline script hashes are computed here, once, from public/*.html.
+const publicSecurity = publicHeaders.createPublicHeaders({
+  publicDir: path.join(__dirname, 'public'),
+  mode: cspMode.mode,
+  isDev: IS_DEV,
+  isAdminPath
+});
+app.use(publicSecurity.middleware);
+console.log(`[headers] public CSP mode: ${cspMode.mode}, ${publicSecurity.hashes.length} inline script hashes`);
 
 app.use(clientIp.createMismatchGuard({ hops: trustProxy.hops }));
 
