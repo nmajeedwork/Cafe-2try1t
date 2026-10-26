@@ -1,8 +1,10 @@
-# 2try1t CafeBot Hardening Report (H1-H5)
+# 2try1t CafeBot Hardening Report (H1-H5, then D2 to D7)
 
 Permanent record of the security hardening passes applied to the CafeBot server.
 H1-H4 followed the Step 16 security audit; H5 followed a later investigation into
-what an automated or spam caller could do to the phone line. Each pass was developed on its own
+what an automated or spam caller could do to the phone line. The stock database,
+the admin login and the final D7 security pass came later and are recorded in
+"D2 to D7 changes" after H5. Each pass was developed on its own
 branch, verified with an automated test harness plus a real-world test, reviewed
 as a pull request, and merged to `main` only after the user personally confirmed
 the one scenario most likely to break real usage.
@@ -64,7 +66,8 @@ and defeat a per-IP limiter.
   one proxy hop (the ngrok edge in dev, a single load balancer in prod).
   `req.ip` is now the real client address; `req.protocol` still resolves from the
   one trusted hop's `X-Forwarded-Proto`, so Twilio signature validation is
-  unaffected.
+  unaffected. (Superseded later: the hop count became the `TRUST_PROXY_HOPS`
+  setting, which is 3 on Render. See "D2 to D7 changes".)
 
 ### Verification
 
@@ -415,6 +418,179 @@ withheld numbers and storage that survives Render deploys.
 
 ---
 
+## D2 to D7 changes
+
+After H5 the project added stock tracking (D2 to D6, designed in
+[inventory-plan.md](inventory-plan.md)) and then ran a final security pass over all of it
+(D7). This section records what shipped, what the D7 review found, and what is still open.
+Line numbers are for `main` at `8c3b4a2`.
+
+### Pull requests
+
+| Milestone | Branch | PR | Merge commit | Merged |
+|---|---|---|---|---|
+| D2 stock database | `d2-stock-db` | [#17](https://github.com/nmajeedwork/Cafe-2try1t/pull/17) | `19261b6` | 2026-10-08 |
+| D3 stock enforcement | `d3-stock-enforcement` | [#18](https://github.com/nmajeedwork/Cafe-2try1t/pull/18) | `cfa64b0` | 2026-10-12 |
+| D3 follow-up (voice example) | `d3-fix-voice-example` | [#19](https://github.com/nmajeedwork/Cafe-2try1t/pull/19) | `72fb0bb` | 2026-10-12 |
+| D4 admin login | `d4-admin-auth` | [#20](https://github.com/nmajeedwork/Cafe-2try1t/pull/20) | `6b33e02` | 2026-10-14 |
+| D4 follow-up (proxy hop count) | `d4-trust-proxy-hops` | [#21](https://github.com/nmajeedwork/Cafe-2try1t/pull/21) | `24d87cf` | 2026-10-17 |
+| D4 follow-up (remove IP debug) | `d4-remove-ip-debug` | [#22](https://github.com/nmajeedwork/Cafe-2try1t/pull/22) | `c76fc3a` | 2026-10-17 |
+| D5 stock dashboard | `d5-stock-dashboard` | [#23](https://github.com/nmajeedwork/Cafe-2try1t/pull/23) | `adc5736` | 2026-10-18 |
+| D6 public sold-out labels | `d6-public-availability` | [#24](https://github.com/nmajeedwork/Cafe-2try1t/pull/24) | `ffa35e1` | 2026-10-19 |
+| D7 dependency bumps | `d7-deps` | [#25](https://github.com/nmajeedwork/Cafe-2try1t/pull/25) | `924c1a0` | 2026-10-22 |
+| D7 voice resume | `d7-voice-resume` | [#26](https://github.com/nmajeedwork/Cafe-2try1t/pull/26) | `4eaca44` | 2026-10-22 |
+| D7 errors, sessions, chat timeout | `d7-errors-sessions` | [#27](https://github.com/nmajeedwork/Cafe-2try1t/pull/27) | `582aa5d` | 2026-10-24 |
+| D7 public security headers | `d7-public-headers` | [#28](https://github.com/nmajeedwork/Cafe-2try1t/pull/28) | `8c3b4a2` | 2026-10-24 |
+| D7 docs | `d7-docs` | this PR | pending | |
+
+### What shipped
+
+- **Stock database (D2).** Neon Postgres through `pg`, all access in `db.js`. One table,
+  created on boot. Stock is loaded into an in-memory Map at boot (3 second timeout, then
+  background retries), plus one follow-up reload about 60 seconds later. SSL is always on with
+  certificate verification (`db.js:133`), the pool holds at most 2 connections that close 1
+  second after use (`db.js:136-138`), queries are parameterized, and the connection string is
+  redacted from every error before it can be logged (`db.js:77-99`).
+- **Stock enforcement (D3).** `add_to_cart`, `confirm_order` and `view_cart` check the
+  in-memory state, so the bot cannot sell a sold-out item, and a confirmed order is never
+  changed by a later toggle. A "Currently Unavailable" line lives in the uncached system
+  block, so the cached prompt blocks stay byte-identical (snapshot tests).
+- **Admin login (D4).** One password, stored only as an scrypt hash (N 32768, r 8, p 1, 64
+  byte key, 16 byte salt, `admin.js:39`) compared in constant time (`admin.js:90`). A separate
+  admin session and cookie, 8 hours absolute and 60 minutes idle (`admin.js:138-139`), the id
+  regenerated at login (`admin.js:340`), a per-session CSRF token plus a strict Origin check on
+  every POST, and 5 wrong passwords per IP per 15 minutes (`admin.js:141-142`). Both admin
+  environment variables unset means admin is off and every `/admin` path is a 404; only one set
+  or a weak secret refuses to start. The admin pages send their own strict CSP
+  (`default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`).
+- **Proxy hop count (D4 follow-ups, PRs #21 and #22).** The original `trust proxy` count of 1
+  made every Render visitor share one rate-limit bucket. The count is now the
+  `TRUST_PROXY_HOPS` setting (default 1, accepted range 1 to 5, anything else refuses to
+  start), and a guard warns when Cloudflare's client IP header disagrees with `req.ip`
+  (`client-ip.js`). [inventory-plan.md](inventory-plan.md) records the value for Render as 3
+  (client, Cloudflare, Render internal) and a phone then laptop lockout test passing with 3;
+  that was the owner's check on Render, not repeated in D7. The temporary `IP_DEBUG` logging
+  was removed in #22.
+- **Stock dashboard (D5).** `POST /admin/api/stock` writes the database first and memory
+  second. An unknown item name or a non-boolean value is a 400
+  (`admin/sections/stock.js:134-139`); a database failure is a 503 with memory unchanged
+  (`admin/sections/stock.js:150, 179`). A "Reload from database" button reloads everything on demand.
+- **Availability endpoint (D6).** `GET /api/availability` returns only the sold-out item
+  names, read from memory: no database call, no session or cookie, `Cache-Control: no-cache`,
+  not rate limited. The Menu page and Home's featured cards show "Sold out" from it, and look
+  exactly as before if the request fails. `/api/menu` is byte-for-byte unchanged.
+- **Dependency bumps (D7, #25).** Lockfile only, inside the existing `package.json` ranges.
+  `npm audit` went from 7 findings (1 critical, 2 high, 4 moderate) to 0, checked on a local
+  install and on a clean `npm ci`.
+- **Voice resume (D7, #26).** `findResumableOrder` now deletes and ignores a saved record that
+  has `order.confirmed === true`, or that lacks an `order` object, a `cart` array, or an
+  `updatedAt` that parses to a real date. It logs one line with the reason and never the phone
+  number. `server.js` is unchanged.
+- **Error handler, sessions, chat timeout (D7, #27).**
+  - A final error handler sends a fixed message by status (400 "Bad request.", 413 "Request
+    too large.", 415 "Unsupported request.", otherwise "Something went wrong."): JSON, or
+    plain text under `/admin`. It never sends a stack, an error message or the request body,
+    whatever `NODE_ENV` is.
+  - The customer session cookie expires 2 hours ahead, renewed each time the session changes.
+    It uses an explicit `MemoryStore` pruned every 10 minutes by an unref'd timer
+    (`customer-session.js`). Admin sessions and phone call sessions are separate and unchanged.
+  - Stored `/chat` history is trimmed once it goes over 60 messages, down to at most 40, in
+    whole turns only, so a tool call is never separated from its result and the history always
+    starts on a plain user message (`chat-history.js`). The cart and order are untouched. After a
+    trim, the next request writes the shorter history to the prompt cache once; tools and the
+    system blocks keep hitting the cache.
+  - `/chat` Anthropic requests have a 30 second timeout with one retry, and the whole turn has a
+    60 second deadline. A timeout returns 503 "CafeBot is taking too long to answer right now.
+    Please try again in a moment." Other errors keep the old 500 text. Voice keeps its own H5
+    limits.
+- **Public security headers (D7, #28).** `public-headers.js` hashes every inline script in
+  `public/*.html` at boot (2 today) and builds the CSP: `default-src 'self'`; `script-src 'self'`
+  plus those hashes; `style-src 'self' https://fonts.googleapis.com`; `font-src
+  https://fonts.gstatic.com`; `img-src 'self' data:`; `connect-src 'self'`; `object-src 'none'`;
+  `base-uri 'none'`; `form-action 'self'`; `frame-ancestors 'none'`. Also sent: `nosniff`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`,
+  `Permissions-Policy`, `Cross-Origin-Opener-Policy: same-origin`, and `Strict-Transport-Security:
+  max-age=604800` (7 days, no `includeSubDomains`, no `preload`) whenever `NODE_ENV` is not
+  `development`. `/admin` gets none of this (its own headers stay byte-identical, proven against
+  a baseline captured before the change), `/voice/*` gets `nosniff` only, and `X-Powered-By` is
+  removed from every response. **The CSP is sent in report-only mode by default
+  (`PUBLIC_CSP_MODE`); switching it to `enforce` is still pending** (see "Open items").
+
+### D7 review findings
+
+Reviewed: the D2 to D6 code (admin login, session and CSRF, rate limits and
+`TRUST_PROXY_HOPS`, `db.js`, the stock toggle route, `/api/availability`, the stock Map, error
+messages and logs) and the dependency audit.
+
+| ID | Severity | Finding | Evidence | Status |
+|---|---|---|---|---|
+| M1 | Medium | Stack traces and file paths in error replies when `NODE_ENV` is not `production` | At the start of D7 a malformed JSON body to `/chat` returned Express's default error page containing `err.stack`. The JSON and form parsers run for every path, `/admin` included, before any router, so the admin router's own handler never saw those errors | Fixed in #27, tested in development, production and with `NODE_ENV` unset |
+| M2 | Medium | Customer sessions never expired, and chat history grew without limit | `express-session` used the default store with no `maxAge`, so entries stayed in memory until a restart, and every turn appended to the history with no cap | Fixed in #27 |
+| M3 | Medium | No timeout on `/chat` | The Anthropic client used the SDK defaults, 10 minutes per request and 2 retries (`node_modules/@anthropic-ai/sdk/core.js:124`), so one slow upstream could hold a request for about half an hour | Fixed in #27 |
+| L1 | Low | `X-Powered-By: Express` on every response | Seen in the header baseline captured before #28 | Fixed in #28 |
+| L2 | Low | This report's deploy checklist said `trust proxy: 1`, and its environment table lacked every variable added since H5 | Read in this file before this change | Fixed in this docs change |
+| L3 | Low | Voice resume checked only the age of a saved order. A confirmed order, a file containing `null` (which made `findResumableOrder` throw), or a record with no valid `updatedAt` (its age was NaN, so it never expired) could be resumed or break the call | Read in `voice-order-recovery.js`; reproduced by the new tests, which fail without the fix | Fixed in #26 |
+| L4 | Low | Server logs record what callers say and what CafeBot answers | `server.js:1587` (`[speech]` transcript), `server.js:1636-1640` (barge-in cutoff, transcript and the replayed prompt), `server.js:1658` (low confidence speech) and `server.js:1768` (`[reply]`) print the text, which can contain a name or a delivery address. Reading every `console` call in `server.js`, `elevenlabs-tts.js` and `voice-order-recovery.js` found no line that prints the caller's phone number | **Open, not changed in D7.** Owner decision: keep the logging for now. Follow-ups: the owner verifies Render's log retention, and "stop logging caller speech or shorten it" is on the Later List. Note: this corrects an earlier planning note that said phone numbers were redacted in voice logs; they are not logged at all, but the speech is |
+
+Dependency audit, 7 findings. Reachability is an assessment from reading the code, not a
+proof:
+
+| Package | Severity | Reached by this app? | Fix |
+|---|---|---|---|
+| `proxy-addr` 2.0.7 | critical | No: `trust proxy` is a hop count, which Express turns into a counting function that never uses the subnet matcher | 2.0.8 |
+| `axios` 1.19.0, `follow-redirects` 1.16.0 | high | No: `twilio` is used only for `validateRequest` and TwiML, never its REST client | 1.20.0, 1.16.1 |
+| `qs` 6.15.3, `body-parser` 1.20.6, `express` 4.22.2 | moderate | Partly: form and query parsing goes through `qs` with default options, so the comma option is not used, but the denial of service needs only crafted input | 6.16.1, 1.20.9, 4.22.3 |
+| `ip-address` 10.7.0 | moderate | Low: used by `express-rate-limit` for IPv6 keys | 10.7.4 |
+
+Checked and left unchanged:
+
+| Area | Evidence |
+|---|---|
+| Admin password hashing | scrypt with a minimum cost (`admin.js:39-41`), constant-time compare (`admin.js:90`), a full scrypt even for unusable input (comment at `admin.js:11-12`) |
+| Admin session and CSRF | own store; 8 hour and 60 minute limits (`admin.js:138-139`, `305`); id regenerated at login (`admin.js:340`); Origin check (`admin.js:222`); token compared in constant time on login, logout and section POSTs (`admin.js:166`, `355`, `376`) |
+| Admin login limit | 5 failures per IP per 15 minutes (`admin.js:141-142`, `264`) |
+| Rate limits and proxy count | `TRUST_PROXY_HOPS` validated at boot; mismatch guard (`client-ip.js:45-56`); tests in `test/client-ip.test.js` pass, including a spoofed `X-Forwarded-For` being ignored and the H1 limit being per real client at 3 hops |
+| `db.js` | parameterized queries only (`db.js:187, 202-204, 217`); verified SSL (`db.js:133`); redaction (`db.js:77-99`); the only log line prints a redacted message (`db.js:149`) |
+| Stock toggle route | login, Origin and CSRF required; the name must be in `menu.json`; value must be a boolean; failure is a 503 with memory unchanged (`admin/sections/stock.js:134-139, 150, 179`) |
+| `/api/availability` and the stock Map | memory read through `currentlyUnavailable()`; keys are menu names only; no database call, session or cookie; tests in `test/d6-availability.test.js` |
+| Twilio signature validation | unchanged; the header baseline test still gets 403 for a bad signature and 200 for a valid one |
+
+### D7 regression record
+
+Automated, local, against fake services only (a fake Anthropic API on loopback, signed fake
+Twilio requests, ElevenLabs blocked, a stubbed database): the full suite was 153 tests
+before D7 and **191 tests, 187 pass, 0 fail, 4 skipped** at `555cec2`, the tip of the #28
+branch that `main` (`8c3b4a2`) merges. The 4 skipped tests need the real Neon dev branch.
+Every D7 guard was also checked by a mutation test (the code was broken on purpose and the
+named tests failed). For #28, real Chromium against local servers loaded Home, Menu, About,
+Order and the admin login in both CSP modes with 0 violations and 0 console errors, and an
+extra unknown inline script was blocked in enforce mode and ran, with a report, in report-only
+mode. In that run the Google Fonts files were fetched with curl and handed to the page through
+a route, because the container's browser cannot reach outside hosts directly, so the first
+fully live font fetch is the owner's Chrome check.
+
+**Not verified by Claude, and not recorded here as done:** anything on Render, Neon, Twilio,
+ElevenLabs or Anthropic; a real chat order; a real phone call or the voice resume callback; the
+Chrome header and Console checks. Those are in
+[before-going-public-checklist.md](before-going-public-checklist.md) for the owner to run and
+tick off.
+
+### Open items
+
+- **PENDING: switch `PUBLIC_CSP_MODE` to `enforce`.** Not done. Plan: run the Chrome checks on
+  the live site, wait about 3 days with a clean Console, set the variable in Render, check
+  again. To roll back, set it to `report-only`. Until then the CSP only reports.
+- **L4:** speech and replies stay in the server log for now (owner decision). The owner
+  verifies Render's log retention (see the checklist), and "stop logging caller speech or
+  shorten it" is on the Later List in [inventory-plan.md](inventory-plan.md).
+- **Past pickup times** pass the server check. The hours logic was frozen during D7.
+- **No per-number voice rate limit or blocklist.** Deferred in D7.
+- **MemoryStore warning** stays in the production log. Customer sessions are short-lived and
+  pruned; a database-backed store would be a new dependency.
+- **A customer idle for more than 2 hours** loses their cart.
+
+---
+
 ## Environment variables introduced or newly load-bearing
 
 | Variable | Introduced / affected by | Default | Behavior |
@@ -429,6 +605,12 @@ withheld numbers and storage that survives Render deploys.
 | `MAX_CALL_TURNS` | H5 | `30` | Claude turns per phone call before it ends with the goodbye |
 | `MAX_CALL_MINUTES` | H5 | `12` | phone call length from the first webhook; decimals allowed |
 | `MAX_GARBLED_IN_ROW` | H5 | `4` | garbled-speech reprompts in a row before the call ends |
+| `DATABASE_URL` | D2 | unset | Neon pooled connection string. On Render use the "production" branch's; locally use the "dev" branch's. Unset means stock tracking is off, the server still starts, and every item counts as in stock. Never commit it or log it |
+| `ADMIN_PASSWORD_HASH` | D4 | unset | scrypt hash in the form `scrypt:N:r:p:salt:hash`, made with `scripts/hash-admin-password.js`. Both admin variables unset means admin is off (every `/admin` path is a 404). Only one set, a malformed hash or a weak secret refuses to start |
+| `ADMIN_SESSION_SECRET` | D4 | unset | long random secret for the admin session, separate from `SESSION_SECRET` (generate with `node scripts/hash-admin-password.js --new-secret`). A weak value refuses to start |
+| `TRUST_PROXY_HOPS` | D4 follow-up (#21) | `1` | how many proxies sit in front of the app, a whole number from 1 to 5, anything else refuses to start. **3 on Render** (client, Cloudflare, Render internal). Decides which address the per-IP rate limits see |
+| `PUBLIC_CSP_MODE` | D7 (#28) | `report-only` | `report-only` sends the public Content Security Policy as a report only, `enforce` makes browsers block violations, anything else refuses to start. Switching to `enforce` is pending. The other public security headers are always on |
+| `CHAT_TEST_REQUEST_TIMEOUT_MS`, `CHAT_TEST_TURN_DEADLINE_MS` | D7 (#27) | unset | test only: shorten the `/chat` timeouts (30000 and 60000 ms). Read only when `NODE_ENV=development`; ignored everywhere else, but do not set them on Render |
 
 ## Deploying to production: checklist
 
@@ -437,9 +619,24 @@ withheld numbers and storage that survives Render deploys.
    without it.
 3. Do not set `DISABLE_HOURS_CHECK` or `FORCE_HOURS_CLOSED`. The server will
    refuse to start if either is `true`.
-4. Ensure exactly one trusted proxy hop terminates TLS in front of the app, so
-   `trust proxy: 1` resolves `req.ip` and `req.protocol` correctly.
+4. Set `TRUST_PROXY_HOPS` to the number of proxies in front of the app. On Render that
+   is 3 (client, Cloudflare, Render internal). With the default of 1, every visitor
+   shares one rate-limit bucket. The setting counts hops; `req.protocol` and the Twilio
+   signature check only need at least one trusted hop. The start-up log shows
+   `[client-ip] trust proxy hops: <n>`, and a warning appears if Cloudflare's client IP
+   header disagrees with the address the app sees.
 5. Optionally tune `RATE_LIMIT_MAX` and `RATE_LIMIT_GLOBAL_MAX` for expected
    traffic.
 6. Leave `MAX_CALL_TURNS`, `MAX_CALL_MINUTES`, and `MAX_GARBLED_IN_ROW` unset to
    use the defaults, and remove any lowered values left over from testing.
+7. Set `DATABASE_URL` to the Neon "production" branch's pooled connection string. The
+   stock table creates itself on the first boot. Without it the server still starts, with
+   stock tracking off.
+8. Set `ADMIN_PASSWORD_HASH` and `ADMIN_SESSION_SECRET` together to turn admin on, or
+   leave both unset to keep it off. Setting only one stops the server from starting.
+9. Leave `PUBLIC_CSP_MODE` unset (report-only) for the first deploy, check the live site
+   (see [before-going-public-checklist.md](before-going-public-checklist.md)), and only then
+   set it to `enforce`.
+10. Check the start-up log: `[client-ip] trust proxy hops: 3`, `[headers] public CSP mode:
+    report-only, 2 inline script hashes`, and no `FATAL` line. The log will also show
+    express-session's MemoryStore warning, which is expected (see "Open items").

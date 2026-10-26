@@ -1,6 +1,6 @@
 # Inventory Dashboard Plan (D1)
 
-Approved plan for adding stock tracking to CafeBot. D1 (planning) is complete, and D2 to D6 are built (D6 once its PR is merged). D7, the security pass and deploy checks, is still ahead. Each milestone below is planned, approved, built, and verified on its own, following the usual working conventions in [project-instructions.md](project-instructions.md).
+Approved plan for adding stock tracking to CafeBot. D1 (planning) is complete, and D2 to D6 are built and merged. D7, the security pass and deploy checks, has its code merged but is not finished: the live checks and the switch of the public CSP to enforcing are still pending (see "Milestone status" below). Each milestone below is planned, approved, built, and verified on its own, following the usual working conventions in [project-instructions.md](project-instructions.md).
 
 ## Scope for v1
 
@@ -144,6 +144,19 @@ One short sentence plus up to two alternatives, for example: "Sorry, the blueber
 | D6 | `/api/availability`; "Sold out" label on the Menu page and badge on featured cards; docs | `server.js`, `public/menu.js`, `public/index.html`, `public/site.css`, `docs/*` | `/api/menu` bytes identical; Menu page renders exactly as today if `/api/availability` fails; hash links, keyboard, and direct-URL checks; no visible change when everything is in stock | Revert | Sonnet |
 | D7 | Security pass, full chat and voice regression, deploy | Whatever the pass finds; `docs/hardening-report.md`; `docs/before-going-public-checklist.md` | Security review of D2-D6; full chat and voice regression, including cart, promotions, hours, H1-H5, and Twilio signature validation; live checks after deploy | Revert the offending PR; unset admin env vars to switch admin off | Opus for the security pass |
 
+## Milestone status
+
+As of 2026-10-26. "Merged" means the PR is on `main` with its automated tests passing. It does not mean it has been checked on Render.
+
+| | Status | PRs |
+|---|---|---|
+| D2 | Merged | [#17](https://github.com/nmajeedwork/Cafe-2try1t/pull/17) |
+| D3 | Merged, with one follow-up | [#18](https://github.com/nmajeedwork/Cafe-2try1t/pull/18), [#19](https://github.com/nmajeedwork/Cafe-2try1t/pull/19) |
+| D4 | Merged, with two follow-ups (proxy hop count, IP debug removal) | [#20](https://github.com/nmajeedwork/Cafe-2try1t/pull/20), [#21](https://github.com/nmajeedwork/Cafe-2try1t/pull/21), [#22](https://github.com/nmajeedwork/Cafe-2try1t/pull/22) |
+| D5 | Merged | [#23](https://github.com/nmajeedwork/Cafe-2try1t/pull/23) |
+| D6 | Merged | [#24](https://github.com/nmajeedwork/Cafe-2try1t/pull/24) |
+| D7 | **In progress.** Security review written up in [hardening-report.md](hardening-report.md). Code merged: dependency bumps ([#25](https://github.com/nmajeedwork/Cafe-2try1t/pull/25)), voice resume ([#26](https://github.com/nmajeedwork/Cafe-2try1t/pull/26)), error handler, session expiry, history cap and chat timeout ([#27](https://github.com/nmajeedwork/Cafe-2try1t/pull/27)), public security headers ([#28](https://github.com/nmajeedwork/Cafe-2try1t/pull/28)). Docs: the PR carrying this text. **Pending:** the live checks on Render and with real calls in [before-going-public-checklist.md](before-going-public-checklist.md), and switching `PUBLIC_CSP_MODE` from report-only to enforce (planned about 3 days after a clean Console check). D7 is done when those are ticked off. | |
+
 ## Vendor setup order
 
 Nmajeed does these. Claude creates no accounts.
@@ -172,19 +185,24 @@ Nmajeed does these. Claude creates no accounts.
 * Voice cost tuning: move the per-minute time label (and the resumed-call note) out of the second system block, for example into the conversation itself, so the conversation-history cache survives across turns.
 * Item and price editing, and order viewing, in the dashboard.
 * TOTP two-factor for the admin login.
+* Past pickup times pass the server check. `validateOrderTiming` checks that a pickup time is inside opening hours but not that it has already passed today, so the model alone decides, inconsistently (see Known issues in [project-instructions.md](project-instructions.md)). The hours logic was frozen during D7, so this needs its own change with its own tests.
+* Per-number voice rate limit and blocklist. H5 bounds a single call but nothing limits repeat callers. Sketch from the D7 plan: an environment list of blocked numbers that get a short hangup, plus an in-memory limit of calls per number per hour. It needs a policy for withheld numbers, and state that survives Render deploys if it should outlast a restart. Decide before advertising the phone number.
+* Admin dashboard v2. Scope not defined yet. Item and price editing, order viewing and TOTP above are candidates; a new feature is a new file in `admin/sections/`.
+* Quantity-based stock. v1 is an in-stock / out-of-stock toggle with no counts (see Scope). Counts would need a quantity column, decrementing on confirmed orders, and a rule for carts that hold more than what is left.
+* Stop logging caller speech, or shorten it. The server log records caller speech and CafeBot replies (`[speech]`, `[reply]` and two warning lines in `server.js`), which can include names and addresses (finding L4 in [hardening-report.md](hardening-report.md)). Decided in D7 to keep the logging for now. Until this is done, the owner verifies Render's log retention (see [before-going-public-checklist.md](before-going-public-checklist.md)).
+* A database-backed customer session store. It would remove the production MemoryStore warning, and is a new dependency, so it needs approval first.
 
 ## Known issues
 
-* Public pages and `/api/*` send no `Content-Security-Policy` or other security headers today (only `X-Powered-By`). The pages use inline scripts and Google Fonts, so a CSP for them needs nonces or hashes. For the D7 pass. The admin pages already have a strict CSP (D4, D5).
+* Public pages and `/api/*` used to send no `Content-Security-Policy` or other security headers (only `X-Powered-By`). Done in D7 ([#28](https://github.com/nmajeedwork/Cafe-2try1t/pull/28)): the inline scripts are hashed at boot, the headers are sent on public responses, `/admin` keeps its own, and `X-Powered-By` is gone. **The CSP is still in report-only mode.** Switching `PUBLIC_CSP_MODE` to `enforce` is pending (see Milestone status). The admin pages already had a strict CSP (D4, D5).
 * `CLAUDE.md` tells Claude Code to use a `/browse` skill for all web browsing, but that skill does not exist in this environment. D1 vendor research used web fetch and web search instead.
 * App-created worktrees conflict with the primary-folder rule. [project-instructions.md](project-instructions.md) says to work in the project folder and never use worktrees, but the Claude desktop app creates a worktree for each session (D2 ran in `.claude/worktrees/sweet-heyrovsky-9221b2`). Git allows a branch in only one checkout at a time, so a branch created in a session worktree is stuck there until the worktree is detached. Workaround used for D2: commit in the worktree, detach it with `git switch --detach`, then check the branch out in the primary folder. Still to decide: whether to stop the app from creating worktrees, or to relax the rule.
 * Stale worktree: `.claude/worktrees/cafebot-session-complete-d9abda` (created 2026-09-24, detached at `fbc7d16`) is still registered and has not been reviewed or removed. Leave it alone until someone checks it for anything unmerged.
-* `npm audit --omit=dev` (run during D2) reports 6 vulnerabilities in existing production dependencies, none of them from `pg`. Not triaged or fixed, and not touched by D2. Triage them in the D7 security pass.
-  * `proxy-addr` (critical): IP spoofing via an IPv4-mapped IPv6 trust subnet, brought in by `express`. This app sets `trust proxy` to a hop count of 1 rather than a subnet list, so it may not apply, but that is unconfirmed.
-  * `axios` (high): prototype pollution gadgets, brought in by `twilio`.
-  * `qs` (moderate): array-limit bypass and a denial of service, brought in by `express` and `body-parser`. `express` and `body-parser` are flagged because of it.
+* `npm audit --omit=dev` (run during D2) reported 6 vulnerabilities in existing production dependencies, none of them from `pg`. Done in D7 ([#25](https://github.com/nmajeedwork/Cafe-2try1t/pull/25)): triaged, and fixed with lockfile-only bumps inside the existing `package.json` ranges. Re-run during D7 it reported 7 findings (1 critical, 2 high, 4 moderate; `follow-redirects` was one more), and 0 after the bumps. Advisories change over time, so run `npm audit` again before going public. See [hardening-report.md](hardening-report.md) for the reachability assessment.
+  * `proxy-addr` (critical): IP spoofing via an IPv4-mapped IPv6 trust subnet, brought in by `express`. Assessed as not reachable, because `trust proxy` is a hop count and Express never uses the subnet matcher for a count. Fixed anyway.
+  * `axios` and `follow-redirects` (high): brought in by `twilio`, which this app uses only for `validateRequest` and TwiML. Assessed as not reachable. Fixed anyway.
+  * `qs` (moderate): array-limit bypass and a denial of service, brought in by `express` and `body-parser`, which are flagged because of it.
   * `ip-address` (moderate): address-family comparison flaw, brought in by `express-rate-limit`.
-  * `npm audit` says a fix is available for all of them.
 
 ## Sources (checked during D1)
 
