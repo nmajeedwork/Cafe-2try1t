@@ -1,6 +1,6 @@
 # Inventory Dashboard Plan (D1)
 
-Approved plan for adding stock tracking to CafeBot. D1 (planning) is complete, and D2 to D6 are built and merged. D7, the security pass and deploy checks, has its code merged but is not finished: the live checks and the switch of the public CSP to enforcing are still pending (see "Milestone status" below). Each milestone below is planned, approved, built, and verified on its own, following the usual working conventions in [project-instructions.md](project-instructions.md).
+Approved plan for adding stock tracking to CafeBot. D1 (planning) is complete, and D2 to D6 are built and merged. D7, the security pass and deploy checks, is done: its code is merged and the owner reported the live checks (see "Milestone status" below). Each milestone below is planned, approved, built, and verified on its own, following the usual working conventions in [project-instructions.md](project-instructions.md).
 
 ## Scope for v1
 
@@ -146,7 +146,7 @@ One short sentence plus up to two alternatives, for example: "Sorry, the blueber
 
 ## Milestone status
 
-As of 2026-10-26. "Merged" means the PR is on `main` with its automated tests passing. It does not mean it has been checked on Render.
+As of 2026-10-30. "Merged" means the PR is on `main` with its automated tests passing. It does not mean it has been checked on Render.
 
 | | Status | PRs |
 |---|---|---|
@@ -155,7 +155,7 @@ As of 2026-10-26. "Merged" means the PR is on `main` with its automated tests pa
 | D4 | Merged, with two follow-ups (proxy hop count, IP debug removal) | [#20](https://github.com/nmajeedwork/Cafe-2try1t/pull/20), [#21](https://github.com/nmajeedwork/Cafe-2try1t/pull/21), [#22](https://github.com/nmajeedwork/Cafe-2try1t/pull/22) |
 | D5 | Merged | [#23](https://github.com/nmajeedwork/Cafe-2try1t/pull/23) |
 | D6 | Merged | [#24](https://github.com/nmajeedwork/Cafe-2try1t/pull/24) |
-| D7 | **In progress.** Security review written up in [hardening-report.md](hardening-report.md). Code merged: dependency bumps ([#25](https://github.com/nmajeedwork/Cafe-2try1t/pull/25)), voice resume ([#26](https://github.com/nmajeedwork/Cafe-2try1t/pull/26)), error handler, session expiry, history cap and chat timeout ([#27](https://github.com/nmajeedwork/Cafe-2try1t/pull/27)), public security headers ([#28](https://github.com/nmajeedwork/Cafe-2try1t/pull/28)). Docs: the PR carrying this text. **Pending:** the live checks on Render and with real calls in [before-going-public-checklist.md](before-going-public-checklist.md), and switching `PUBLIC_CSP_MODE` from report-only to enforce (planned about 3 days after a clean Console check). D7 is done when those are ticked off. | |
+| D7 | **Done** (marked in the close-out change of 2026-10-30). Security review written up in [hardening-report.md](hardening-report.md). Merged: dependency bumps ([#25](https://github.com/nmajeedwork/Cafe-2try1t/pull/25)), voice resume ([#26](https://github.com/nmajeedwork/Cafe-2try1t/pull/26)), error handler, session expiry, history cap and chat timeout ([#27](https://github.com/nmajeedwork/Cafe-2try1t/pull/27)), public security headers ([#28](https://github.com/nmajeedwork/Cafe-2try1t/pull/28)), docs ([#29](https://github.com/nmajeedwork/Cafe-2try1t/pull/29)), and the close-out docs (the PR carrying this text). Owner-confirmed on the live service: `PUBLIC_CSP_MODE=enforce` since 2026-10-30 (report-only since 2026-10-24, no CSP errors seen in Chrome on Home, Menu, About and Order), `NODE_VERSION=24.22.1` set on Render on 2026-10-27, one chat order, one phone order, voice resume after a dropped call, no resume after a confirmed order, vendor settings and spend limits checked, and the Render log viewer range at 7 days with no log stream. Claude verified none of the live checks. Not reported, so not recorded as done: the certificate rejection test and a build log read-back of the Node version, and the checklist items listed as unreported in [hardening-report.md](hardening-report.md), "D7 live checks". See [before-going-public-checklist.md](before-going-public-checklist.md). | |
 
 ## Vendor setup order
 
@@ -194,7 +194,7 @@ Nmajeed does these. Claude creates no accounts.
 
 ## Known issues
 
-* Public pages and `/api/*` used to send no `Content-Security-Policy` or other security headers (only `X-Powered-By`). Done in D7 ([#28](https://github.com/nmajeedwork/Cafe-2try1t/pull/28)): the inline scripts are hashed at boot, the headers are sent on public responses, `/admin` keeps its own, and `X-Powered-By` is gone. **The CSP is still in report-only mode.** Switching `PUBLIC_CSP_MODE` to `enforce` is pending (see Milestone status). The admin pages already had a strict CSP (D4, D5).
+* Public pages and `/api/*` used to send no `Content-Security-Policy` or other security headers (only `X-Powered-By`). Done in D7 ([#28](https://github.com/nmajeedwork/Cafe-2try1t/pull/28)): the inline scripts are hashed at boot, the headers are sent on public responses, `/admin` keeps its own, and `X-Powered-By` is gone. The CSP was report-only from 2026-10-24, and the owner reports `PUBLIC_CSP_MODE=enforce` went live on 2026-10-30 (see Milestone status). The admin pages already had a strict CSP (D4, D5).
 * `CLAUDE.md` tells Claude Code to use a `/browse` skill for all web browsing, but that skill does not exist in this environment. D1 vendor research used web fetch and web search instead.
 * App-created worktrees conflict with the primary-folder rule. [project-instructions.md](project-instructions.md) says to work in the project folder and never use worktrees, but the Claude desktop app creates a worktree for each session (D2 ran in `.claude/worktrees/sweet-heyrovsky-9221b2`). Git allows a branch in only one checkout at a time, so a branch created in a session worktree is stuck there until the worktree is detached. Workaround used for D2: commit in the worktree, detach it with `git switch --detach`, then check the branch out in the primary folder. Still to decide: whether to stop the app from creating worktrees, or to relax the rule.
 * Stale worktree: `.claude/worktrees/cafebot-session-complete-d9abda` (created 2026-09-24, detached at `fbc7d16`) is still registered and has not been reviewed or removed. Leave it alone until someone checks it for anything unmerged.
