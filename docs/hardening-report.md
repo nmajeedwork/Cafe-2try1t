@@ -441,7 +441,8 @@ Line numbers are for `main` at `8c3b4a2`.
 | D7 voice resume | `d7-voice-resume` | [#26](https://github.com/nmajeedwork/Cafe-2try1t/pull/26) | `4eaca44` | 2026-10-22 |
 | D7 errors, sessions, chat timeout | `d7-errors-sessions` | [#27](https://github.com/nmajeedwork/Cafe-2try1t/pull/27) | `582aa5d` | 2026-10-24 |
 | D7 public security headers | `d7-public-headers` | [#28](https://github.com/nmajeedwork/Cafe-2try1t/pull/28) | `8c3b4a2` | 2026-10-24 |
-| D7 docs | `d7-docs` | this PR | pending | |
+| D7 docs | `d7-docs` | [#29](https://github.com/nmajeedwork/Cafe-2try1t/pull/29) | `642d063` | 2026-10-25 |
+| D7 close-out docs | `d7-closeout` | this PR | pending | |
 
 ### What shipped
 
@@ -513,8 +514,9 @@ Line numbers are for `main` at `8c3b4a2`.
   max-age=604800` (7 days, no `includeSubDomains`, no `preload`) whenever `NODE_ENV` is not
   `development`. `/admin` gets none of this (its own headers stay byte-identical, proven against
   a baseline captured before the change), `/voice/*` gets `nosniff` only, and `X-Powered-By` is
-  removed from every response. **The CSP is sent in report-only mode by default
-  (`PUBLIC_CSP_MODE`); switching it to `enforce` is still pending** (see "Open items").
+  removed from every response. The CSP is sent in report-only mode by default
+  (`PUBLIC_CSP_MODE`). The owner reports that the live service went report-only on 2026-10-24
+  and was switched to `enforce` on 2026-10-30 (see "D7 live checks").
 
 ### D7 review findings
 
@@ -569,17 +571,51 @@ mode. In that run the Google Fonts files were fetched with curl and handed to th
 a route, because the container's browser cannot reach outside hosts directly, so the first
 fully live font fetch is the owner's Chrome check.
 
-**Not verified by Claude, and not recorded here as done:** anything on Render, Neon, Twilio,
-ElevenLabs or Anthropic; a real chat order; a real phone call or the voice resume callback; the
-Chrome header and Console checks. Those are in
-[before-going-public-checklist.md](before-going-public-checklist.md) for the owner to run and
-tick off.
+Claude has no access to Render, Neon, Twilio, ElevenLabs, Anthropic or the live site, so it
+verified none of the live checks. The next section records what the owner reported.
+
+### D7 live checks (owner-confirmed)
+
+Recorded on 2026-10-30 from the owner's report. These are the owner's statements, not
+something Claude checked. Dates are given only where the owner gave one.
+
+- **Public CSP.** `PUBLIC_CSP_MODE=enforce` went live on 2026-10-30. The CSP had been in
+  report-only mode since 2026-10-24. The owner checked Home, Menu, About and Order in Chrome
+  with the Console open and saw no CSP errors.
+- **Node version.** `NODE_VERSION=24.22.1` was set on Render on 2026-10-27, following Render's
+  eMudhra advisory. The service redeployed, and live chat and phone orders worked afterwards.
+- **Orders and voice resume.** One chat order and one phone order worked on the live service.
+  Resume after a dropped call worked, and a confirmed order was not resumed on the next call.
+- **Vendor settings and spend limits.** The owner checked them. Which individual values were
+  seen is not recorded here.
+- **Render logs.** The Render log viewer range is 7 days, and no log stream is configured.
+
+Not reported to Claude, so not recorded as done:
+
+- reading the live response headers (before or after the CSP switch), the framing test, the
+  admin pages check on the live site, and the admin stock toggle on the live site;
+- the Network tab, scroll and New Order checks on the public pages (only the Console result was
+  reported);
+- the customer cookie expiry, and the real cost of the chat order and the phone calls;
+- re-running `npm audit` just before sharing the link;
+- the optional certificate rejection test after the Node version change, and reading the Node
+  version back from a build log, so this report does not confirm which version the build
+  actually used;
+- the individual vendor values behind "vendor settings and spend limits", and who can read the
+  Render logs.
+
+The D7 automated tests ran locally on Node 22.22.0. They were not re-run on 24.22.1. The repo
+does not pin a Node version (no `engines` field, `.nvmrc` or `.node-version`), so the Render
+setting is the only pin.
 
 ### Open items
 
-- **PENDING: switch `PUBLIC_CSP_MODE` to `enforce`.** Not done. Plan: run the Chrome checks on
-  the live site, wait about 3 days with a clean Console, set the variable in Render, check
-  again. To roll back, set it to `report-only`. Until then the CSP only reports.
+- **D7 is done** as of the close-out change of 2026-10-30. The items below are what stays open.
+- **DONE: switch `PUBLIC_CSP_MODE` to `enforce`.** Live since 2026-10-30 (owner-confirmed). To
+  roll back, set it to `report-only` in Render and restart; no code deploy is needed.
+- **Node version.** `NODE_VERSION=24.22.1` is set on Render (owner-confirmed, 2026-10-27).
+  The certificate rejection test was not run and the version was not read back from a build
+  log. See "D7 live checks".
 - **L4:** speech and replies stay in the server log for now (owner decision). The owner
   verifies Render's log retention (see the checklist), and "stop logging caller speech or
   shorten it" is on the Later List in [inventory-plan.md](inventory-plan.md).
@@ -609,7 +645,8 @@ tick off.
 | `ADMIN_PASSWORD_HASH` | D4 | unset | scrypt hash in the form `scrypt:N:r:p:salt:hash`, made with `scripts/hash-admin-password.js`. Both admin variables unset means admin is off (every `/admin` path is a 404). Only one set, a malformed hash or a weak secret refuses to start |
 | `ADMIN_SESSION_SECRET` | D4 | unset | long random secret for the admin session, separate from `SESSION_SECRET` (generate with `node scripts/hash-admin-password.js --new-secret`). A weak value refuses to start |
 | `TRUST_PROXY_HOPS` | D4 follow-up (#21) | `1` | how many proxies sit in front of the app, a whole number from 1 to 5, anything else refuses to start. **3 on Render** (client, Cloudflare, Render internal). Decides which address the per-IP rate limits see |
-| `PUBLIC_CSP_MODE` | D7 (#28) | `report-only` | `report-only` sends the public Content Security Policy as a report only, `enforce` makes browsers block violations, anything else refuses to start. Switching to `enforce` is pending. The other public security headers are always on |
+| `PUBLIC_CSP_MODE` | D7 (#28) | `report-only` | `report-only` sends the public Content Security Policy as a report only, `enforce` makes browsers block violations, anything else refuses to start. On the live service it is `enforce` since 2026-10-30 (owner-confirmed). The other public security headers are always on |
+| `NODE_VERSION` | D7 close-out | unset | a Render setting that picks the Node.js version; the app code does not read it. Set to `24.22.1` on 2026-10-27 following Render's eMudhra advisory (owner-confirmed). The repo does not pin a Node version |
 | `CHAT_TEST_REQUEST_TIMEOUT_MS`, `CHAT_TEST_TURN_DEADLINE_MS` | D7 (#27) | unset | test only: shorten the `/chat` timeouts (30000 and 60000 ms). Read only when `NODE_ENV=development`; ignored everywhere else, but do not set them on Render |
 
 ## Deploying to production: checklist
@@ -638,5 +675,6 @@ tick off.
    (see [before-going-public-checklist.md](before-going-public-checklist.md)), and only then
    set it to `enforce`.
 10. Check the start-up log: `[client-ip] trust proxy hops: 3`, `[headers] public CSP mode:
-    report-only, 2 inline script hashes`, and no `FATAL` line. The log will also show
+    <report-only or enforce>, 2 inline script hashes` (enforce on the live service since
+    2026-10-30), and no `FATAL` line. The log will also show
     express-session's MemoryStore warning, which is expected (see "Open items").
